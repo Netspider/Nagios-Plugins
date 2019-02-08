@@ -1,0 +1,71 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import shlex
+import re
+import glob
+
+cmdfiles = "/etc/nagios_commands.d/*.conf"
+
+
+def get_command(name, cmdfiles):
+    for filename in cmdfiles:
+        try:
+            lines = open(filename).readlines()
+        except IOError as e:
+            print "UNKNOWN: could not read {0}: {1}".format(filename, repr(e))
+            sys.exit(3)
+        for line in lines:
+            line = line.strip()
+            if line.startswith("{0}".format(name)):
+                try:
+                    k, v = line.split("=", 1)
+                    if k.strip() == name:
+                        return v.strip()
+                except ValueError:
+                    continue
+    print("UNKNOWN: command not found in mapping")
+    sys.exit(3)
+
+
+def fill_template(template, arguments):
+    cmd = template
+    for num, arg in enumerate(arguments, start=1):
+        cmd = cmd.replace('$ARG%d$' % num, arg)
+    cmd = re.sub(r'\$ARG\d+\$', '', cmd)
+    return cmd
+
+
+cmdargs = os.getenv('SSH_ORIGINAL_COMMAND')
+
+if cmdargs is None:
+    print("UNKNOWN: no command found")
+    sys.exit(3)
+else:
+    try:
+        cmdargs = shlex.split(cmdargs)
+    except ValueError:
+        print("UNKNOWN: could not parse command")
+        sys.exit(3)
+
+cmdtemplate = get_command(cmdargs[0], glob.glob(cmdfiles))
+
+completecommand = fill_template(cmdtemplate, cmdargs[1:])
+
+completecommand = shlex.split(completecommand)
+
+if "SSH_ORIGINAL_COMMAND" in os.environ:
+    os.environ.pop("SSH_ORIGINAL_COMMAND")
+
+os.environ["NRPE_MULTILINESUPPORT"] = "1"
+
+try:
+    os.execvp(completecommand[0], completecommand)
+except OSError as e:
+    if hasattr(e, "errno") and e.errno == 2:
+        print("UNKNOWN: command could not be started ({0})".format(repr(e)))
+    else:
+        print("UNKNOWN: command could not be started")
+    sys.exit(3)
