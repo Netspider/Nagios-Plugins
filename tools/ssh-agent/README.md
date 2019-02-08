@@ -38,8 +38,12 @@ define service {
 * secure encryption with the settings YOU want to use
 * SSH is already present on most machines
 * no `nasty_metachars` handling needed because the first argument will be called as a program and everything else is used as parameters
+* plugins can have multlinie output
+* no character length limitation in plugin output
+* adaptive security for the connection via ssh server configuration
 
 ## cons
 
 * Connection multiplexing is used to speed up the connections. This is done using Control\* in ~nagios/.ssh/config. By default there is a maximum of 10 Sessions per host, controlled by **MaxSessions** in /etc/ssh/sshd\_config
 * You can not use quotes in your arguments because the command (check\_by\_ssh\*) uses single quotes when calling ssh and the service check uses double quotes to put all parameters in \$ARG2\$
+* only publickey is supported for authentication
