@@ -1,0 +1,402 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import argparse
+import re
+import time
+import pickle
+import imp
+
+
+class NetworkData(object):
+    def __init__(self, nagios, ignored_interfaces, override_bandwidth, default_bandwidth):
+        self.nagios = nagios
+        self.ignored_interfaces = ignored_interfaces
+        self.override_bandwidth = override_bandwidth
+        self.default_bandwidth = default_bandwidth
+        self._traffic = None
+        self._retransmits = None
+
+    def get_retransmit_data(self):
+        if self._retransmits:
+            return self._retransmits
+        raw_data = open("/proc/net/snmp").readlines()
+        keys = values = result = None
+        for line in raw_data:
+            if line.startswith("Tcp:"):
+                if line[5] in "-0123456789":
+                    values = [int(el) for el in line.split()[1:]]
+                else:
+                    keys = line.split()[1:]
+
+        if keys and values:
+            try:
+                netstat_data = dict(zip(keys, values))
+                result = dict(
+                    sent=netstat_data["OutSegs"],
+                    retransmitted=netstat_data["RetransSegs"],
+                )
+            except KeyError:
+                self.nagios.die("unknown", "fields in /proc/net/snmp have changed")
+        return result
+
+    def get_traffic_data(self):
+        if self._traffic:
+            return self._traffic
+        data = {}
+        column_names = [
+            'received_bytes', 'received_packets', 'received_errors', 'received_dropped', 'received_overruns',
+            'received_frame', 'received_compressed', 'received_multicast',
+            'transmitted_bytes', 'transmitted_packets', 'transmitted_errors', 'transmitted_dropped',
+            'transmitted_overruns', 'transmitted_collisions', 'transmitted_carrier', 'transmitted_compressed',
+        ]
+
+        content = open('/proc/net/dev', 'r').readlines()
+        content = content[2:]  # ignore 2 header lines
+        for line in content:
+            elements = re.findall(r'(\b[^\s]+\b)', line)
+            if len(elements) > 0:
+                interface = elements[0]
+                data[interface] = {}
+                del elements[0]
+
+                if len(column_names) != len(elements):
+                    self.nagios.die("unknown", "number of columns in /proc/net/dev has changed")
+
+                for key, element in zip(column_names, elements):
+                    data[interface][key] = int(element)
+        del data['lo']
+        interfaces = data.keys()
+
+        if self.ignored_interfaces:
+            for interface in interfaces:
+                for ignored_interface in self.ignored_interfaces:
+                    try:
+                        if re.search(ignored_interface, interface):
+                            del data[interface]
+
+                    except KeyError:
+                        pass  # if it doesn't exist we don't have to delete it
+
+        return data
+
+    def get_interfaces(self):
+        if not self._traffic:
+            self._traffic = self.get_traffic_data()
+        return self._traffic.keys()
+
+    def get_bandwidth(self, interface):
+        # /sys/class/net/IF/speed exists since Kernel 2.6.32 (Centos 6, Debian 7)
+        # "{}".format() was implemented in Python 2.6 (Centos 6?, Debian 7)
+        # -> parsing "ethtool IF" is not needed, because this script does only
+        #    run on machines with /sys/class/net/IF/speed
+
+        if interface in self.override_bandwidth:
+            return self.override_bandwidth[interface]
+        else:
+            try:
+                return int(open("/sys/class/net/{}/speed".format(interface)).read().strip())
+            except Exception:
+                return self.default_bandwidth
+
+
+def dict_str_int(data):
+    output = {}
+    try:
+        for t in data.split(","):
+            for key, value in t.split(":", 1):
+                output[key] = int(value)
+    except Exception:
+        raise argparse.ArgumentTypeError("use this format: key1:number1,key2:number2,key3:number3")
+    return output
+
+
+def to_list(data):
+    try:
+        output = data.split(",")
+    except Exception:
+        raise argparse.ArgumentTypeError("use this format: value1,value2,value3")
+    return output
+
+
+def to_int(data):
+    # pycharm complains about "type=int" in the argparser...
+    return int(data)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--bandwidth', dest='bandwidth', action='store', default={}, type=dict_str_int,
+                        help="override maximum speed (MBit/s) of some interfaces / "
+                             "format: interface1:speed1,interface2:speed2")
+    parser.add_argument('--tmp_path', dest='tmp_path', action='store', default='/tmp/',
+                        help="path for 'traffic.dump' / default : /tmp ")
+
+    parser.add_argument('--ignore_interfaces', dest='ignore_interfaces', action='store', default=[], type=to_list,
+                        help="interfaces that will be ignored completely / format: interface1,interface2,interface3")
+    parser.add_argument('--disable_alarm', dest='disable_alarm', action='store', default=[], type=to_list,
+                        help="disable traffic warning for some interfaces / format = interface1,interface2,interface3")
+
+    parser.add_argument('-w', '--warn_traffic', dest='warn_traffic', action='store', type=to_int, default=80,
+                        help="warning limit for traffic in percent / default = 80")
+    parser.add_argument('-c', '--crit_traffic', dest='crit_traffic', action='store', type=to_int, default=90,
+                        help="critical limit for traffic in percent / default = 90")
+
+    parser.add_argument('-W', '--warn_error', dest='warn_error', action='store', type=to_int, default=1,
+                        help="warning limit for errors in percent / default = 1")
+    parser.add_argument('-C', '--crit_error', dest='crit_error', action='store', type=to_int, default=2,
+                        help="critical limit for errors in percent / default = 2")
+
+    parser.add_argument('--warn_retransmitted', dest='warn_retransmitted', action='store', type=to_int, default=1,
+                        help="warning limit for retransmits in percent / default = 1")
+    parser.add_argument('--crit_retransmitted', dest='crit_retransmitted', action='store', type=to_int, default=2,
+                        help="critical limit for retransmits in percent / Default = 2")
+
+    nagioslib = imp.load_source("nagioslib2", "/usr/lib/nagios/plugins/nagioslib2.py")
+    nagios = nagioslib.NagiosStatus("Traffic")
+
+    args = parser.parse_args()
+
+    if args.warn_traffic > args.crit_traffic or args.warn_error > args.crit_error:
+        nagios.die("unknown", "the provided warn value is greater than the crit value")
+    else:
+        network_data = NetworkData(nagios=nagios, ignored_interfaces=args.ignore_interfaces,
+                                   override_bandwidth=args.bandwidth, default_bandwidth=1000)
+        nagios_output(nagios, network_data, args.disable_alarm, args.tmp_path, args.warn_traffic, args.crit_traffic,
+                      args.warn_error, args.crit_error, args.warn_retransmitted, args.crit_retransmitted)
+
+
+def read_ifstats_from_sys(interface, stats):
+    return int(open('/sys/class/net/{0}/statistics/{1}'.format(interface, stats), 'r').read())
+
+
+def save_data(network_data, directory):
+    traffic = network_data.get_traffic_data()
+    netstat = network_data.get_retransmit_data()
+
+    for interface in traffic.keys():
+
+        traffic[interface]['received_errors_all'] = sum(
+            traffic[interface]['received_{}'.format(el)] for el in ['errors', 'dropped', 'overruns', 'frame']
+        )
+
+        traffic[interface]['transmitted_errors_all'] = sum(
+            traffic[interface]['transmitted_{}'.format(el)] for el in ['errors', 'dropped', 'overruns', 'carrier']
+        )
+    time_now = int(time.mktime(time.localtime()))
+
+    traffic['generic'] = dict(
+        timestamp=time_now,
+        sent=netstat['sent'],
+        retransmitted=netstat['retransmitted'],
+    )
+
+    pickle.dump(traffic, open(directory + "/traffic.dump", "wb"))
+
+
+def read_data(directory):
+    data = pickle.load(open(directory + "/traffic.dump", "rb"))
+    return data
+
+
+def calc_rate(nagios, network_data, directory):
+    traffic_old = {}
+    try:
+        traffic_old = read_data(directory)
+    except Exception:
+        try:
+            save_data(network_data, directory)
+        except IOError:
+            nagios.die("unknown", "could not write to {}".format(directory))
+        nagios.die("unknown", "could not read historical data (first run?)")
+
+    try:
+        save_data(network_data, directory)
+    except IOError:
+        nagios.die("unknown", "could not write to {}".format(directory))
+
+    results = {}
+    traffic = network_data.get_traffic_data()
+    segments = network_data.get_retransmit_data()
+    time_now = int(time.mktime(time.localtime()))
+    seconds_passed = time_now - traffic_old['generic']['timestamp']
+
+    for interface in network_data.get_interfaces():
+        traffic_if = traffic[interface]
+        traffic_if_old = traffic_old[interface]
+        result = {}
+
+        traffic_if['received_errors_all'] = sum(
+            traffic_if['received_{}'.format(el)] for el in ['errors', 'dropped', 'overruns', 'frame']
+        )
+
+        traffic_if['transmitted_errors_all'] = sum(
+            traffic_if['transmitted_{}'.format(el)] for el in ['errors', 'dropped', 'overruns', 'carrier']
+        )
+
+        try:
+            result['errors_rx_pct'] = (
+                    (traffic_if['received_errors_all'] - traffic_if_old['received_errors_all']) * 100.0 /
+                    (traffic_if['received_packets'] - traffic_if_old['received_packets']))
+        except ZeroDivisionError:
+            result['errors_rx_pct'] = 0.0
+
+        try:
+            result['errors_tx_pct'] = (
+                    (traffic_if['transmitted_errors_all'] - traffic_if_old['transmitted_errors_all']) * 100.0 /
+                    (traffic_if['transmitted_packets'] - traffic_if_old['transmitted_packets']))
+        except ZeroDivisionError:
+            result['errors_tx_pct'] = 0.0
+
+        try:
+            result['mbit_rx'] = ((traffic_if['received_bytes'] - traffic_if_old['received_bytes']) /
+                                 float(seconds_passed) * 8.0 / 1000000.0)
+            result['mbit_tx'] = ((traffic_if['transmitted_bytes'] - traffic_if_old['transmitted_bytes']) /
+                                 float(seconds_passed) * 8.0 / 1000000.0)
+        except ZeroDivisionError:
+            result['mbit_rx'] = 0.0
+            result['mbit_tx'] = 0.0
+
+        results[interface] = result
+
+    try:
+        results['retransmitted'] = ((segments['retransmitted'] - traffic_old['generic']['retransmitted']) * 100.0 /
+                                    (float(segments['sent']) - float(traffic_old['generic']['sent'])))
+    except ZeroDivisionError:
+        results['retransmitted'] = 0
+
+    return results
+
+
+def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_traffic_pct, crit_traffic_pct,
+                  warn_error_pct, crit_error_pct, warn_retransmitted_pct, crit_retransmitted_pct):
+
+    try:
+        results = calc_rate(nagios, network_data, directory)
+
+        for interface in network_data.get_interfaces():
+            data = results[interface]
+
+            data['max_bw'] = network_data.get_bandwidth(interface)
+            data['crit_bw'] = crit_traffic_pct * data['max_bw'] / 100.0
+            data['warn_bw'] = warn_traffic_pct * data['max_bw'] / 100.0
+
+            alarm = True
+            if not data['max_bw'] or data['max_bw'] <= 0:
+                interfaces_no_alarm.append(interface)
+            if interfaces_no_alarm:
+                for interface_no_alarm in interfaces_no_alarm:
+                    try:
+                        if re.search(interface_no_alarm, interface):
+                            alarm = False
+                            break
+
+                    except KeyError:
+                        nagios.die("unknown", "the interface set by 'disable_alarm' does not exist")
+
+            if alarm:
+                nagios.ok(performance_data=nagios.generate_performance_data(
+                    label="{}_RX".format(interface),
+                    value="{:.6f}".format(data['mbit_rx']),
+                    unit='Mbps',
+                    warn=data['warn_bw'],
+                    crit=data['crit_bw'],
+                    min=0,
+                    max=data['max_bw'],
+                ))
+
+                nagios.ok(performance_data=nagios.generate_performance_data(
+                    label="{}_TX".format(interface),
+                    value="{:.6f}".format(data['mbit_tx']),
+                    unit='Mbps',
+                    warn=data['warn_bw'],
+                    crit=data['crit_bw'],
+                    min=0,
+                    max=data['max_bw'],
+                ))
+
+                if data['mbit_rx'] >= data['warn_bw']:
+                    if data['mbit_rx'] >= data['crit_bw']:
+                        nagios.critical(message="{}_rx: {:.2f} Mbit/s".format(interface, data['mbit_rx']))
+                    else:
+                        nagios.warning(message="{}_rx: {:.2f} Mbit/s".format(interface, data['mbit_rx']))
+
+                if data['mbit_tx'] >= data['warn_bw']:
+                    if data['mbit_tx'] >= data['crit_bw']:
+                        nagios.critical(message="{}_tx: {:.2f} Mbit/s".format(interface, data['mbit_tx']))
+                    else:
+                        nagios.warning(message="{}_tx: {:.2f} Mbit/s".format(interface, data['mbit_tx']))
+            else:
+                nagios.ok(performance_data=nagios.generate_performance_data(
+                    label="{}_RX".format(interface),
+                    value="{:.6f}".format(data['mbit_rx']),
+                    unit='Mbps',
+                ))
+
+                nagios.ok(performance_data=nagios.generate_performance_data(
+                    label="{}_TX".format(interface),
+                    value="{:.6f}".format(data['mbit_tx']),
+                    unit='Mbps',
+                ))
+
+            if data['errors_rx_pct'] >= warn_error_pct:
+                if data['errors_rx_pct'] >= crit_error_pct:
+                    nagios.critical(message="{}_rx_error: {:.2f}%".format(interface, data['errors_rx_pct']))
+                else:
+                    nagios.warning(message="{}_rx_error: {:.2f}%".format(interface, data['errors_rx_pct']))
+
+            if data['errors_tx_pct'] >= warn_error_pct:
+                if data['errors_tx_pct'] >= crit_error_pct:
+                    nagios.critical(message="{}_tx_error: {:.2f}%".format(interface, data['errors_tx_pct']))
+                else:
+                    nagios.warning(message="{}_tx_error: {:.2f}%".format(interface, data['errors_tx_pct']))
+
+            nagios.ok(performance_data=nagios.generate_performance_data(
+                label="{}_RX_error".format(interface),
+                value="{:.6f}".format(data['errors_rx_pct']),
+                unit='%',
+                warn=warn_error_pct,
+                crit=crit_error_pct,
+                min=0,
+                max=100,
+            ))
+            nagios.ok(performance_data=nagios.generate_performance_data(
+                label="{}_TX_error".format(interface),
+                value="{:.6f}".format(data['errors_tx_pct']),
+                unit='%',
+                warn=warn_error_pct,
+                crit=crit_error_pct,
+                min=0,
+                max=100,
+            ))
+
+        if results['retransmitted'] >= warn_retransmitted_pct:
+            if results['retransmitted'] >= crit_retransmitted_pct:
+                nagios.critical(message="retransmitted: {:.2f}%".format(results['retransmitted']))
+            else:
+                nagios.warning(message="retransmitted: {:.2f}%".format(results['retransmitted']))
+
+        nagios.ok(performance_data=nagios.generate_performance_data(
+            label="retransmitted_rate",
+            value="{:.6f}".format(results['retransmitted']),
+            unit='%',
+            warn=warn_retransmitted_pct,
+            crit=crit_retransmitted_pct,
+            min=0,
+            max=100,
+        ))
+
+        if nagios.exitcode == nagios.code["ok"]:
+            nagios.ok(message="interfaces: {}".format(", ".join(network_data.get_interfaces())))
+        nagios.exit()
+    except Exception:
+        try:
+            save_data(network_data, directory)
+        except IOError:
+            nagios.die("unknown", "could not write to {}".format(directory))
+        nagios.die("unknown", "could not read historical data (datafile corrupt?)")
+
+
+if __name__ == "__main__":
+    main()
