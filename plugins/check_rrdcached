@@ -1,0 +1,30 @@
+#!/usr/bin/python
+
+import socket
+import sys
+
+socket_path = "/var/run/rrdcached.sock"
+
+
+def query(cmd):
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(socket_path)
+        s.send(cmd)
+        s.shutdown(socket.SHUT_WR)
+        return s.recv(100000000).splitlines()
+    except Exception as e:
+        print("rrdcached socket not found: {} ({})".format(socket_path, repr(e)))
+        sys.exit(3)
+
+
+def main():
+    data = query("STATS\nQUIT\n")
+    print("Socket OK - {} | {}".format(
+        data[0].replace(' follow', ''),
+        ' '.join(data[1:]).replace(': ', '=')))
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+        main()
