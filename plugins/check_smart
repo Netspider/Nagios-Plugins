@@ -1,0 +1,141 @@
+#!/bin/bash
+
+PROGPATH=$(/usr/bin/dirname $0)
+. $PROGPATH/utils.sh
+
+ex_msg="SMART OK: all disks OK"
+ex_code=$STATE_OK
+ex_perf=""
+
+output () {
+	if [ $ex_code -le $1 ]
+	then
+		ex_code=$1
+		ex_msg=$2
+	fi
+}
+
+readsmart () {
+	tmp_info=$(echo "${smartctl_output}" | awk "/^${1}/ { print \$${4} }")
+	if [ -n "${tmp_info}" ]
+	then
+		# kill leading zeros (value column)
+		tmp_info=${tmp_info#0*}
+		# if variable is empty now, it was 0
+		if [ -z "${tmp_info}" ]
+		then
+			tmp_info="0"
+		fi
+		ex_perf="${ex_perf} ${devname}_${2}=${tmp_info}${3}"
+		echo ${tmp_info}
+	fi
+}
+
+readsmartraw () {
+	readsmart "$1" "$2" "$3" 10
+}
+
+readsmartvalue () {
+	readsmart "$1" "$2" "$3" 4
+}
+
+readsmartworst () {
+	readsmart "$1" "$2" "$3" 5
+}
+
+for i in /sys/block/sd*; do
+	if [ -d "$i" ]
+	then
+		vendor=$(tr -d '[:space:]' < $i/device/vendor)
+		model=$(cat $i/device/model)
+		devname="$(basename $i)"
+		device="/dev/$devname"
+
+		if [ "$vendor" != "ATA" ]
+		then
+			ns_platte="$ns_platte $device"
+			output $STATE_OK "SMART OK: SMART not available on $ns_platte (virtual or HW-RAID)"
+			continue
+		fi
+
+		smartctl_output="$(sudo /usr/sbin/smartctl -a $device)"
+		retcode=$?
+
+		if [ -z "${smartctl_output}" ]
+		then
+			u_platte="$u_platte $device"
+                        output $STATE_UNKNOWN "SMART UNKNOWN: could not call 'sudo smartctl -a $device'"
+                        continue
+		fi
+
+		if $(echo "$smartctl_output" | grep -Fq 'QEMU HARDDISK')
+		then
+			ns_platte="$ns_platte $device"
+			output $STATE_OK "SMART OK: SMART not available on $ns_platte (virtual or HW-RAID)"
+			continue
+		fi
+
+		if $(echo "$smartctl_output" | grep -Fq 'SMART support is: Disabled')
+		then
+			u_platte="$u_platte $device"
+			output $STATE_UNKNOWN "SMART UNKNOWN: SMART is disabled on $u_platte"
+			continue
+		fi
+
+		readsmartraw "  1 Raw_Read_Error_Rate" "raw_read_error_rate" "" > /dev/null
+		readsmartraw "  3 Spin_Up_Time" "spinup_time" "ms" > /dev/null
+		readsmartraw "  5 Reallocated_Sector_Ct" "realloc_sector_count" "" > /dev/null
+		readsmartraw "  5 Retired_Block_Count" "realloc_sector_count" "" > /dev/null
+		readsmartraw "  7 Seek_Error_Rate" "seek_error_rate" "" > /dev/null
+		readsmartraw "190 Airflow_Temperature_Cel" "air_temp" "C" > /dev/null
+		readsmartraw "193 Load_Cycle_Count" "load_cycle_count" "" > /dev/null
+		readsmartraw "194 Temperature_Celsius" "temp" "C" > /dev/null
+		readsmartraw "195 Hardware_ECC_Recovered" "hardware_ecc_recovered" "" > /dev/null
+		#readsmartraw "196 Reallocated_Event_Count" "realloc_event_count" "" > /dev/null
+		readsmartraw "197 Current_Pending_Sector" "pending_remaps" "" > /dev/null
+		readsmartvalue "231 SSD_Life_Left" "ssd_lifetime_remaining" "%" > /dev/null
+		readsmartvalue "233 Media_Wearout_Indicator" "ssd_lifetime_remaining" "%" > /dev/null
+		intel_wearlevel=$(readsmartvalue "233 Media_Wearout_Indicator" "ssd_lifetime_remaining" "")
+
+		if [ -n "${intel_wearlevel}" ] && [ "${intel_wearlevel}" -le 10 ]
+		then
+			output $STATE_CRITICAL "SMART CRITICAL: ${intel_wearlevel}% lifetime of $device left"
+		fi
+
+		if echo "$smartctl_output" | grep -Fq In_the_past
+		then
+			output $STATE_OK "$ex_msg ($device was below threshold)"
+		fi
+
+		if echo "$smartctl_output" | grep -Fq FAILING_NOW
+		then
+			output $STATE_CRITICAL "SMART CRITICAL: attribute of $device is below threshold"
+		fi
+
+		if [ $(($retcode & (2**1 + 2**2))) -ne 0 ]
+		then
+			u_platte="$u_platte $device"
+			output $STATE_UNKNOWN "SMART UNKNOWN: command error or permission error on $u_platte"
+		fi
+
+		if [ $(($retcode & (2**3 + 2**4 + 2**7))) -ne 0 ]
+		then
+			e_platte="$e_platte $device"
+			output $STATE_CRITICAL "SMART CRITICAL: error on disk(s) $e_platte"
+		fi
+
+		if [ $(($retcode & (2**6))) -ne 0 ]
+		then
+			w_platte="$w_platte $device"
+			output $STATE_OK "SMART OK: (not critical) warning on disk(s) $w_platte"
+		fi
+	fi
+done
+
+if [ -n "$ex_perf" ]
+then
+	echo "$ex_msg |$ex_perf"
+else
+	echo $ex_msg
+fi
+exit $ex_code
