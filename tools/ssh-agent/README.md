@@ -19,17 +19,17 @@ This is a replacement for NRPE using SSH.
 ## usage
 ```
 define service {
-	host_name			YOURHOST
-	service_description	Local SMTP Status
-	check_command		check_by_ssh_1arg!check_smtp
-	use					template-service
+    host_name           server
+    service_description Local SMTP Status
+    check_command       check_by_ssh_1arg!check_smtp
+    use                 template-service
 }
 
 define service {
-	host_name			YOURHOST
-	service_description	Apache Status
-	check_command		check_by_ssh!check_http!"-H 127.0.0.1 -u /server-status"
-	use					template-service
+    host_name           server
+    service_description Apache Status
+    check_command       check_by_ssh!check_http!"-H 127.0.0.1 -u /server-status"
+    use                 template-service
 }
 ```
 
