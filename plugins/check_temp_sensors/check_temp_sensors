@@ -1,0 +1,80 @@
+#!/usr/bin/perl -W
+
+use strict;
+use utf8;
+
+# invalid temperatures > 0
+my @suppressed_temps = (127000,127500,128000,256000);
+
+sub human_readable_temps {
+	my $temp = $_[0];
+	substr ($temp, -2) = "";
+	my $pre = substr($temp, 0,-1);
+	my $post = substr($temp, -1);
+	return "$pre.$post";
+}
+
+sub get_label {
+	my $temp = $_[0];
+	$temp =~ s/input/label/g;
+	return $temp;
+}
+
+sub get_content {
+	my $file = $_[0];
+	open FILE, "<$file" or return "";
+	my @lines= <FILE>;
+	close FILE;
+	chomp(@lines);
+	return $lines[0];
+}
+
+my @hwmon_folders = </sys/class/hwmon/hwmon*>;
+
+chomp(@hwmon_folders);
+
+my $return_string = "";
+my $count = 0;
+my $overall_count = 0;
+
+if(scalar(@hwmon_folders) > 0) {
+	foreach my $hwmon_folder (@hwmon_folders){
+		my @all_temps =  <$hwmon_folder/temp*_input>;
+		my @all_temps2 =  <$hwmon_folder/device/temp*_input>;
+
+		push(@all_temps, @all_temps2);
+		chomp(@all_temps);
+
+		foreach my $temp (@all_temps) {
+			my $temp_content = get_content($temp);
+			if(defined($temp_content)) {
+				$count++;
+				if((grep /$temp_content/, @suppressed_temps) || ($temp_content <= 0)) {
+				}
+				else {
+					my $temp_value = human_readable_temps($temp_content);
+					my $label = get_label($temp);
+					my $label_value = get_content($label);
+					if($label_value eq "") {
+						$label_value = "temp" . $count;
+					}
+					if($hwmon_folder =~ m/(\d+)$/ ) {
+						$hwmon_folder = "hw" . $1;
+					}
+					$return_string .= "'$hwmon_folder $label_value'=${temp_value}C ";
+				}
+			}
+		}
+		$overall_count += $count;
+		$count = 0;
+	}
+
+	if($overall_count == 1) {
+		print "Hardware temperatures: 1 value found | $return_string\n";
+	} else {
+		print "Hardware temperatures: $overall_count values found | $return_string\n";
+	}
+
+} else {
+	print "Hardware temperatures: 0 values found";
+}

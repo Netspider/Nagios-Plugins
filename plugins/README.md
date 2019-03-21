@@ -10,6 +10,7 @@ plugins
     ├── check_example.cfg # /etc/pnp4nagios/check_commands/
     └── check_example.php # /etc/pnp4nagios/templates.d/
 ```
+Pull requests for missing functionality are welcome!
 
 ## description
 
@@ -54,6 +55,25 @@ define service {
 ```dosini
 # NRPE / ssh-agent
 check_smart=/usr/lib/nagios/plugins/check_smart
+```
+
+### check_temp_sensors
+This plugin reads the hardware temperature sensors built into the system. There is no warning mechanism for high temperatures, this plugin is just for the metrics.
+
+*Written in Perl 5*
+
+#### Nagios configuration
+```
+define service {
+    host_name               server
+    service_description     Sensor Temperature
+    check_command           check_by_ssh_1arg!check_temp_sensors
+    use                     template-service
+}
+```
+```dosini
+# NRPE / ssh-agent
+check_temp_sensors=/usr/lib/nagios/plugins/check_temp_sensors
 ```
 
 ### check\_traffic
