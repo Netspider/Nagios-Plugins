@@ -15,6 +15,24 @@ Pull requests for missing functionality are welcome!
 ## nagioslib2
 This library is needed by some of the plugins used here. It provides easy access to the Nagios plugin api.
 
+## check\_redis
+This plugin return many metrics and checks if a random key can be saved in redis and if it has the same value after reading it again.
+
+*Written in Go*
+
+```
+define service {
+    host_name               server
+    service_description     Redis Stats
+    check_command           check_by_ssh!check_redis!"-p 6379 -P $USER2$"
+    use                     template-service
+}
+```
+```dosini
+# NRPE / ssh-agent
+check_redis=/usr/lib/nagios/plugins/check_redis $ARG1$
+```
+
 ## check\_rrdcached
 If you are using pnp4nagios with many metrics, you might already use rrdcached. It reduces disk IO by writing rrd files in bulk. This plugin gathers some statistics about the caching daemon.
 
