@@ -269,7 +269,7 @@ $graph++;
 # Requests
 #############################################################################
 ##
-## average http requests since start -> je länger der Start her ist, desto ungenauer wird der Graph
+## average http requests since start -> the graphs gets inaccurate if squid was started some time ago
 ##
 #$average_http_requests = array_search("average_http_requests", $NAME);
 #
