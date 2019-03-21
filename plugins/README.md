@@ -12,17 +12,14 @@ plugins
 ```
 Pull requests for missing functionality are welcome!
 
-## description
-
-### nagioslib2
+## nagioslib2
 This library is needed by some of the plugins used here. It provides easy access to the Nagios plugin api.
 
-### check\_rrdcached
+## check\_rrdcached
 If you are using pnp4nagios with many metrics, you might already use rrdcached. It reduces disk IO by writing rrd files in bulk. This plugin gathers some statistics about the caching daemon.
 
 *Written in Python &ge; 2.6*
 
-#### Nagios configuration
 ```
 define service {
     host_name               server
@@ -36,12 +33,11 @@ define service {
 check_rrdcached=/usr/lib/nagios/plugins/check_rrdcached
 ```
 
-### check\_smart
+## check\_smart
 Gathers S.M.A.R.T diagnostic data from hard drives, warns if a parameter hints at a failing device and returns many metrics. Hardware raids are not supported.
 
 *Written in Bash*
 
-#### Nagios configuration
 ```
 define service {
     host_name               server
@@ -57,12 +53,29 @@ define service {
 check_smart=/usr/lib/nagios/plugins/check_smart
 ```
 
-### check_temp_sensors
+## check\_squid
+Collects a ton of statistics from Squid. Warns if median service time (time to deliver pages) reaches a threshold.
+
+*Written in Python 2*
+
+```
+define service {
+    host_name               server
+    service_description     Squid Statistics
+    check_command           check_by_ssh!check_squid!"-p 8080 -Uusername -P$USER2$"
+    use                     template-service
+}
+```
+```dosini
+# NRPE / ssh-agent
+check_squid=/usr/lib/nagios/plugins/check_squid $ARG1$
+```
+
+## check_temp_sensors
 This plugin reads the hardware temperature sensors built into the system. There is no warning mechanism for high temperatures, this plugin is just for the metrics.
 
 *Written in Perl 5*
 
-#### Nagios configuration
 ```
 define service {
     host_name               server
@@ -76,13 +89,12 @@ define service {
 check_temp_sensors=/usr/lib/nagios/plugins/check_temp_sensors
 ```
 
-### check\_traffic
+## check\_traffic
 Checks network traffic and warns about too many retransmits and network errors. Provides many metrics.
 
-*Written in Python &ge; 2.6*<br>
+*Written in Python &ge; 2.7*<br>
 *uses nagioslib2*
 
-#### Nagios configuration
 ```
 define service {
     host_name               server

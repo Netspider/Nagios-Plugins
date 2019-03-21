@@ -1,0 +1,278 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+# vim: ft=python
+
+
+import optparse
+import sys
+import urllib2
+import re
+import base64
+import imp
+
+test_mode = False
+
+
+def timeout_reached(signum, frame):
+    _ = signum
+    _ = frame
+    print("Timeout reached")
+    sys.exit(3)
+
+
+def check_port(option, opt_str, value, parser):
+    _ = option
+    if not (1 <= value <= 65535):
+        raise optparse.OptionValueError("%s option invalid port number" % opt_str)
+    parser.values.port = value
+
+
+def parse_options():
+    optp = optparse.OptionParser()
+    optp.add_option('-H', '--hostname', dest='hostname', default="localhost",
+                    help='Hostname of the Squid Daemon. Default: localhost')
+    optp.add_option('-p', '--port', dest='port', default=80, type='int', action='callback', callback=check_port,
+                    help='Port of the Squid Daemon. Default: 80')
+    optp.add_option('-t', '--timeout', dest='timeout', default=10, type='int',
+                    help="Plugin timeout in seconds. Default: 10")
+    optp.add_option('-U', '--user', dest='user', default=None, help="username if Squid uses authorization")
+    optp.add_option('-P', '--password', dest='pw', default=None, help="password if Squid uses authorization")
+    optp.add_option('--proto', dest='protocol', default="http",
+                    help="Query protocol. Default: http")
+    optp.add_option('--service-times', dest='crit_service_times', default=1.0, type='float',
+                    help="critical MedianServiceTime in seconds: Default: 1.0")
+
+    opts, args = optp.parse_args()
+    return opts
+
+
+def getrawdata(nagios, host, port, protocol, page, user=None, password=None):
+    if test_mode:
+        return open("test_%s" % page).read()
+    else:
+        url = "cache_object://localhost/%s" % page
+        if user is None:
+            headers = {}
+        else:
+            headers = {"Proxy-Authorization": "Basic %s" % base64.b64encode("%s:%s" % (user, password))}
+        req = urllib2.Request(url, headers=headers)
+        req.set_proxy("%s:%d" % (host, port), protocol)
+        try:
+            return urllib2.urlopen(req).read()
+        except urllib2.URLError as e:
+            nagios.die("critical", "Squid not running? - Could not connect to (%s://%s:%s): %s" % (
+                protocol, host, port, e))
+
+
+def getdata(nagios, host, port, protocol, user=None, password=None):
+    data = dict()
+    data["info"] = getrawdata(nagios, host, port, protocol, "info", user, password)
+    data["counters"] = getrawdata(nagios, host, port, protocol, "counters", user, password)
+    data["storedir"] = getrawdata(nagios, host, port, protocol, "storedir", user, password)
+    return data
+
+
+def flatten(mylist):
+    result = []
+    for e in mylist:
+        if type(e) is tuple:
+            result.extend(e)
+        else:
+            result.append(e)
+    return result
+
+
+def sizeof_fmt(num):
+    for x in ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']:
+        if num < 1024.0:
+            return "%3.1f %s" % (num, x)
+        num /= 1024.0
+
+
+def parsevalues(data, regex, resolveunit=True, resolveoverflow=True, multiply=1, add=0, allowstrings=False):
+    units = {
+        "b": 1024**0,
+        "k": 1024**1,
+        "m": 1024**2,
+        "g": 1024**3,
+        "t": 1024**4,
+        "p": 1024**5,
+        "e": 1024**6,
+        "z": 1024**7,
+        "y": 1024**8
+    }
+    m = re.findall(regex, data, re.MULTILINE)
+    values = []
+    for value in flatten(m):
+        localmultiply = multiply
+        localadd = add
+        tmpv = value
+        if resolveunit:
+            m = re.match(r"^([+-]?[\d.]+)\s*([bkmgtpezy])b?$", value, re.IGNORECASE)
+            if m is not None:
+                tmpv, unit = m.groups()
+                if unit.lower() in units:
+                    localmultiply *= units[unit.lower()]
+                else:
+                    print("warning: could not parse '%s'" % value)
+                    continue
+        # get type
+        try:
+            try:
+                tmpv2 = int(tmpv)
+            except ValueError:
+                tmpv2 = float(tmpv)
+        except Exception:
+            if allowstrings:
+                values.append(tmpv)
+            else:
+                print("warning: could not parse '%s'" % tmpv)
+            continue
+        if resolveoverflow and tmpv2 < 0:
+            tmpv2 += 2**32
+        values.append(tmpv2 * localmultiply + localadd)
+    return values
+
+
+def main():
+    nagioslib = imp.load_source("nagioslib2", "/usr/lib/nagios/plugins/nagioslib2.py")
+    nagios = nagioslib.NagiosStatus("Squid")
+
+    opts = parse_options()
+
+    nagioslib.Timeout.start(timeout_reached, opts.timeout)
+
+    data = getdata(nagios, opts.hostname, opts.port, opts.protocol, opts.user, opts.pw)
+
+    version = parsevalues(data["info"], r"^Squid Object Cache:\s*Version (.+)$", allowstrings=True)[0]
+
+    ## Filesystem Space in use
+    #space_in_use, space_total = parsevalues(
+    #    data["storedir"], r"^Filesystem Space in use: ([+-]?\d+)/([+-]?\d+) KB \(\d+%\)$", multiply=1024)
+    #nagios.ok(performance_data="'disk size'=%dB 'disk used'=%dB" % (space_total, space_in_use))
+
+    # Squid cache status
+    cache_size, cache_used = parsevalues(data["storedir"], r"^(?:Maximum|Current) Size: ([+-]?\d+(?:[,.]\d+)?\s+\w+)$")
+    nagios.ok(performance_data="'cache size'=%dB 'cache used'=%dB" % (cache_size, cache_used))
+
+    # Squid client requests
+    client_requests, client_hits, client_errors = parsevalues(
+        data["counters"], r"^client_http\.(?:requests|hits|errors) = ([+-]?\d+)$")
+    nagios.ok(performance_data="misses=%d hits=%d errors=%d total=%d" % (
+        client_requests-client_hits-client_errors, client_hits, client_errors, client_requests))
+
+    # Squid traffic status
+    traffic_received, traffic_sent, traffic_from_cache = parsevalues(
+        data["counters"], r"^client_http\.(?:kbytes_in|kbytes_out|hit_kbytes_out) = ([+-]?\d+)$", multiply=8192)
+    nagios.ok(performance_data="received=%db sent=%db 'from cache'=%db" % (
+        traffic_received, traffic_sent, traffic_from_cache))
+
+    # Squid object size
+    mean_object_size = parsevalues(data["info"], r"^\s*Mean Object Size:\s*([+-]?[\d.]+\s+\w+)$")[0]
+    nagios.ok(performance_data="'Object size'=%dB" % mean_object_size)
+
+    # Squid Median Services Times
+    time_http = parsevalues(data["info"], r"^\s*HTTP Requests \(All\):\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="Http=%.5fs" % time_http)
+    time_miss = parsevalues(data["info"], r"^\s*Cache Misses:\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="'Cache misses'=%.5fs" % time_miss)
+    time_hit = parsevalues(data["info"], r"^\s*Cache Hits:\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="'Cache hits'=%.5fs" % time_hit)
+    time_nearhit = parsevalues(data["info"], r"^\s*Near Hits:\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="'Near hits'=%.5fs" % time_nearhit)
+    time_notmodified = parsevalues(data["info"], r"^\s*Not-Modified Replies:\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="'Not-modified replies'=%.5fs" % time_notmodified)
+    time_dns = parsevalues(data["info"], r"^\s*DNS Lookups:\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="'Dns lookups'=%.5fs" % time_dns)
+    time_icp = parsevalues(data["info"], r"^\s*ICP Queries:\s*([+-]?[\d.]+)\s+[+-]?[\d.]+$")[0]
+    nagios.ok(performance_data="'Icp queries'=%.5fs" % time_icp)
+
+    # Connection information for squid
+    num_clients = parsevalues(data["info"], r"^\s*Number of clients accessing cache:\s*([+-]?\d+)$")[0]
+    nagios.ok(performance_data="num_clients=%.0f" % num_clients)
+    average_http_requests = parsevalues(
+        data["info"], r"^\s*Average HTTP requests per minute since start:\s*([+-]?[\d.]+)$")[0]
+    nagios.ok(performance_data="average_http_requests=%.5frpm" % average_http_requests)
+
+    # Cache information for squid
+    storage_swap_size = parsevalues(data["info"], r"^\s*Storage Swap size:\s*([+-]?[\d.]+\s+\w+)$")[0]
+    nagios.ok(performance_data="'Storage Swap size'=%dB" % storage_swap_size)
+    storage_swap_used, storage_swap_free = parsevalues(
+        data["info"], r"^\s*Storage Swap capacity:\s*([+-]?[\d.]+)% used,\s*([+-]?[\d.]+)% free$")
+    nagios.ok(performance_data="'Storage Swap used'=%.2f%% 'Storage Swap free'=%.2f%%" % (
+        storage_swap_used, storage_swap_free))
+    storage_mem_size = parsevalues(data["info"], r"^\s*Storage Mem size:\s*([+-]?[\d.]+\s+\w+)$")[0]
+    nagios.ok(performance_data="'Storage Mem size'=%dB" % storage_mem_size)
+    storage_mem_used, storage_mem_free = parsevalues(
+        data["info"], r"^\s*Storage Mem capacity:\s*([+-]?[\d.]+)% used,\s*([+-]?[\d.]+)% free$")
+    nagios.ok(performance_data="'Storage Mem used'=%.2f%% 'Storage Mem free'=%.2f%%" % (
+        storage_mem_used, storage_mem_free))
+
+    # Resource usage for squid
+    uptime = parsevalues(data["info"], r"^\s*UP Time:\s*([+-]?[\d.]+) seconds$")[0]
+    nagios.ok(performance_data="uptime=%.3fs" % uptime)
+    cpu_time = parsevalues(data["info"], r"^\s*CPU Time:\s*([+-]?[\d.]+) seconds$")[0]
+    nagios.ok(performance_data="'CPU time'=%.3fs" % cpu_time)
+    cpu_usage = parsevalues(data["info"], r"^\s*CPU Usage:\s*([+-]?[\d.]+)%$")[0]
+    nagios.ok(performance_data="'CPU usage'=%.3f%%" % cpu_usage)
+
+    # Memory usage for squid via mallinfo()
+    memory_in_use = parsevalues(data["info"], r"^\s*Total in use:\s*([+-]?[\d.]+\s+\w+)\s+[+-]?\d+%$")[0]
+    nagios.ok(performance_data="memory_in_use=%dB" % memory_in_use)
+    memory_free = parsevalues(data["info"], r"^\s*Total free:\s*([+-]?[\d.]+\s+\w+)\s+[+-]?\d+%$")[0]
+    nagios.ok(performance_data="memory_free=%dB" % memory_free)
+    memory_size = parsevalues(data["info"], r"^\s*Total size:\s*([+-]?[\d.]+\s+\w+)$")[0]
+    nagios.ok(performance_data="memory_size=%dB" % memory_size)
+
+    # Memory accounted for
+    mem_accounted_total = parsevalues(data["info"], r"^\s*Total accounted:\s*([+-]?[\d.]+\s+\w+)\s+[+-]?\d+%$")[0]
+    nagios.ok(performance_data="mem_accounted_total=%dB" % mem_accounted_total)
+    mem_accounted = parsevalues(data["info"], r"^\s*memPool accounted:\s*([+-]?[\d.]+\s+\w+)\s+[+-]?\d+%$")[0]
+    nagios.ok(performance_data="mem_accounted=%dB" % mem_accounted)
+    mem_unaccounted = parsevalues(data["info"], r"^\s*memPool unaccounted:\s*([+-]?[\d.]+\s+\w+)\s+[+-]?\d+%$")[0]
+    nagios.ok(performance_data="mem_unaccounted=%dB" % mem_unaccounted)
+
+    # File descriptor usage for squid
+    max_fd = parsevalues(data["info"], r"^\s*Maximum number of file descriptors:\s*([+-]?[\d]+)$")[0]
+    nagios.ok(performance_data="max_file_descriptors=%d" % max_fd)
+    largest_fd = parsevalues(data["info"], r"^\s*Largest file desc currently in use:\s*([+-]?[\d]+)$")[0]
+    nagios.ok(performance_data="largest_file_descriptor=%d" % largest_fd)
+    fd_used = parsevalues(data["info"], r"^\s*Number of file desc currently in use:\s*([+-]?[\d]+)$")[0]
+    nagios.ok(performance_data="file_descriptors_used=%d" % fd_used)
+    files_queued = parsevalues(data["info"], r"^\s*Files queued for open:\s*([+-]?[\d]+)$")[0]
+    nagios.ok(performance_data="num_files_queued=%d" % files_queued)
+    fd_free = parsevalues(data["info"], r"^\s*Available number of file descriptors:\s*([+-]?[\d]+)$")[0]
+    nagios.ok(performance_data="file_descriptors_free=%d" % fd_free)
+
+    # Stored entries
+    store_entries = re.findall(r"([\d]+) StoreEntries", data["info"])[0]
+    nagios.ok(performance_data="StoreEntries=%s" % store_entries)
+    storeentries_with_memobjects = re.findall(r"([\d]+) StoreEntries with MemObjects", data["info"])[0]
+    nagios.ok(performance_data="'StoreEntries with MemObjects'=%s" % storeentries_with_memobjects)
+    hot_object_cache_items = re.findall(r"([\d]+) Hot Object Cache Items", data["info"])[0]
+    nagios.ok(performance_data="'Hot Object Cache Items'=%s" % hot_object_cache_items)
+    on_disk_objects = re.findall(r"([\d]+) on-disk objects", data["info"])[0]
+    nagios.ok(performance_data="'on-disk objects'=%s" % on_disk_objects)
+
+    median_service_times = {
+        'http': time_http,
+        'cache misses': time_miss,
+        'cache hits': time_hit,
+        'near hits': time_nearhit,
+        'not-modified replies': time_notmodified,
+        'dns lookups': time_dns,
+        'icq queries': time_icp
+    }
+    for servtime in median_service_times.keys():
+        if float(median_service_times[servtime]) >= opts.crit_service_times:
+            nagios.critical("%s: %ss" % (servtime, median_service_times[servtime]))
+
+    nagios.ok("Squid %s running" % version)
+    nagios.ok("%s / %s (%.1f%%) space used" % (
+        sizeof_fmt(cache_used), sizeof_fmt(cache_size), float(cache_used) / cache_size * 100.0))
+    nagioslib.Timeout.stop()
+    nagios.exit()
+
+
+if __name__ == "__main__":
+        main()
