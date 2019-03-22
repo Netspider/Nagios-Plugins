@@ -89,6 +89,34 @@ define service {
 check_squid=/usr/lib/nagios/plugins/check_squid $ARG1$
 ```
 
+## check\_switch-status
+Reads switch metrics using SNMP.
+
+*Written in Python 2*<br>
+*uses nagioslib2*
+
+```
+define service{
+    host_name               server
+    service_description     Switch Status
+    check_command           check_switch-status!--mem-warn 75 --mem-crit 95
+    use                     template-service
+}
+```
+
+```
+# strong encryption
+define command {
+        command_name    check_switch-status
+        command_line    $USER1$/check_switch-status --host $HOSTADDRESS$ --snmp_secName $USER3$ --snmp_authPassword $USER4$ --snmp_privPassword $USER5$ --snmp_authProtocol sha --snmp_secLevel AuthPriv --snmp_privProtocol aes $ARG1$
+}
+# weak encryption
+define command {
+        command_name    check_switch-status-v2
+        command_line    $USER1$/check_switch-status --host $HOSTADDRESS$ --community $USER2$ $ARG1$
+}
+```
+
 ## check_temp_sensors
 This plugin reads the hardware temperature sensors built into the system. There is no warning mechanism for high temperatures, this plugin is just for the metrics.
 
