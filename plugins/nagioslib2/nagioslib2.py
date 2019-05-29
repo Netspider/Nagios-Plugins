@@ -8,6 +8,7 @@ import time
 import signal
 
 
+# noinspection PyPep8Naming
 class external(object):
     @staticmethod
     def run(cmd, shell=True):
@@ -16,8 +17,11 @@ class external(object):
         return data[0], data[1], tmp.returncode
 
 
+# noinspection PyPep8Naming
 class snmp(object):
-    def __init__(self, host, version, community=False, port=161, secName=False, authPassword=False, authProtocol=False, snmpbindir='/usr/bin/', engineID=False, secLevel=False, contextName=False, privProtocol=False, privPassword=False):
+    def __init__(self, host, version, community=False, port=161, secName=False, authPassword=False, authProtocol=False,
+                 snmpbindir='/usr/bin/', engineID=False, secLevel=False, contextName=False, privProtocol=False,
+                 privPassword=False):
         self.community = community
         self.host = host
         self.port = port
@@ -34,16 +38,26 @@ class snmp(object):
         self.privProtocol = privProtocol
         self.privPassword = privPassword
 
-        snmpargs = {'authProtocol': {'option': '-a', 'value': self.authProtocol}, 'authPassword': {'option': '-A', 'value': self.authPassword}, 'community': {'option': '-c', 'value': self.community}, 'engineID': {'option': '-e', 'value': self.engineID}, 'secLevel': {'option': '-l', 'value': self.secLevel}, 'contextName': {'option': '-n', 'value': self.contextName}, 'secName': {'option': '-u', 'value': self.secName}, 'privProtocol': {'option': '-x', 'value': self.privProtocol}, 'privPassword': {'option': '-X', 'value': self.privPassword}, 'version': {'option': '-v', 'value': self.version}}
+        snmpargs = {
+            'authProtocol': {'option': '-a', 'value': self.authProtocol},
+            'authPassword': {'option': '-A', 'value': self.authPassword},
+            'community': {'option': '-c', 'value': self.community},
+            'engineID': {'option': '-e', 'value': self.engineID},
+            'secLevel': {'option': '-l', 'value': self.secLevel},
+            'contextName': {'option': '-n', 'value': self.contextName},
+            'secName': {'option': '-u', 'value': self.secName},
+            'privProtocol': {'option': '-x', 'value': self.privProtocol},
+            'privPassword': {'option': '-X', 'value': self.privPassword},
+            'version': {'option': '-v', 'value': self.version}}
 
         snmpcmd = []
         for arg in snmpargs.keys():
-            if snmpargs[arg]['value'] != False:
+            if snmpargs[arg]['value'] is not False:
                 snmpcmd.append('%s %s' % (snmpargs[arg]['option'], snmpargs[arg]['value']))
         self.snmpcmd = ' '.join(snmpcmd)
 
     def walk(self, oid, bulk=True, dictionary=True):
-        if bulk == True:
+        if bulk is True:
             snmpbin = self.snmpbindir + 'snmpbulkwalk'
         else:
             snmpbin = self.snmpbindir + 'snmpwalk'
@@ -51,13 +65,14 @@ class snmp(object):
         snmpcmd = snmpbin + ' ' + self.snmpcmd + ' -Oq -On' + ' %s:%s ' % (self.host, self.port) + oid
         stdout, stderr, ret = external.run(snmpcmd)
 
-        if '\n' in stdout: snmpdata = stdout.split('\n')
-        else: snmpdata = [stdout]
+        if '\n' in stdout:
+            snmpdata = stdout.split('\n')
+        else:
+            snmpdata = [stdout]
 
         if ret != 0:
             return None, stderr
         else:
-            data = None
             if dictionary is True:
                 data = {}
                 for line in snmpdata:
@@ -88,10 +103,12 @@ class snmp(object):
     def identify_vendor(self):
         if type(self.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.3.0')) is not tuple:
             # DELL Powerconnect
-            return ['DELL', self.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.3.0'), self.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.1.0')]
+            return ['DELL', self.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.3.0'),
+                    self.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.1.0')]
         if type(self.get('.1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0')) is not tuple:
             # HP ProCurve
-            return ['HP', self.get('.1.3.6.1.4.1.11.2.36.1.1.5.1.1.7.1'), self.get('.1.3.6.1.4.1.11.2.36.1.1.5.1.1.8.1')]
+            return ['HP', self.get('.1.3.6.1.4.1.11.2.36.1.1.5.1.1.7.1'),
+                    self.get('.1.3.6.1.4.1.11.2.36.1.1.5.1.1.8.1')]
         if type(self.get('.1.3.6.1.4.1.9.2.1.5.0')) is not tuple:
             # Cisco
             return ['CISCO', self.get('.1.3.6.1.2.1.47.1.1.1.1.2.1'), self.get('.1.3.6.1.2.1.47.1.1.1.1.2.1')]
@@ -105,6 +122,7 @@ class snmp(object):
             return [None, None], None
 
 
+# noinspection PyPep8Naming
 class livestatus(object):
     @staticmethod
     def query(msg):
@@ -119,7 +137,7 @@ class livestatus(object):
         while True:
             data = s.recv(8192)
             if not data:
-                if total_data == []:
+                if not total_data:
                     total_data = ['[[]]']
                 break
             total_data.append(data)
@@ -140,14 +158,15 @@ class livestatus(object):
         while True:
             data = s.recv(8192)
             if not data:
-                if total_data == []:
+                if not total_data:
                     total_data = ['[[]]']
                 break
             total_data.append(data)
         s.close()
         return ast.literal_eval(''.join(total_data))
 
-## collects Nagios Status messages and code
+
+# collects Nagios Status messages and code
 class NagiosStatus(object):
     code = {
         "unknown": 3, 3: "unknown",
@@ -156,7 +175,7 @@ class NagiosStatus(object):
         "ok": 0, 0: "ok"
     }
 
-    ## constructor
+    # constructor
     # initialize class parameters
     # @param self object pointer
     # @param program_name name of the program at the beginning of the message
@@ -169,7 +188,7 @@ class NagiosStatus(object):
         self.info_name = info_name
         self.info = [[], [], [], []]
 
-    ## add new message and check if exitcode is worse than before
+    # add new message and check if exitcode is worse than before
     # @param self object pointer
     # @param code new exit code if it is worse than the last code
     # @param message user message to append
@@ -185,7 +204,7 @@ class NagiosStatus(object):
         if info:
             self.info[code].append(info)
 
-    ## return message for specific exit code or nothing, if no message for this code exists
+    # return message for specific exit code or nothing, if no message for this code exists
     # @param self object pointer
     # @param code exit code
     def _build_message(self, code):
@@ -194,7 +213,7 @@ class NagiosStatus(object):
         else:
             return []
 
-    ## return info for specific exit code or nothing, if no message for this code exists
+    # return info for specific exit code or nothing, if no message for this code exists
     # @param self object pointer
     # @param code exit code
     def _build_info(self, code):
@@ -203,22 +222,22 @@ class NagiosStatus(object):
         else:
             return []
 
-    ## immediately exit the program ignoring previously set messages and exit codes
+    # immediately exit the program ignoring previously set messages and exit codes
     # @param code exit code to use
     # @param message the message to print
     def die(self, code, message):
-        print message
+        print(message)
         if isinstance(code, int):
             sys.exit(code)
         elif code in self.code:
             sys.exit(self.code[code])
 
-    ## immediately exit the program using the previously set messages and exit code
+    # immediately exit the program using the previously set messages and exit code
     # @param self object pointer
     def exit(self):
         sys.exit(self.show_info())
 
-    ## print the previously set messages and exit code
+    # print the previously set messages and exit code
     # @param self object pointer
     def show_info(self):
         out_message = [self.program_name]
@@ -231,12 +250,12 @@ class NagiosStatus(object):
             out_info.extend(self._build_info(code))
 
         if len(out_info) > 0:
-            print "%s | %s %s" % (" ".join(out_message), " ".join(self.performance_data), " ".join(out_info))
+            print("%s | %s %s" % (" ".join(out_message), " ".join(self.performance_data), " ".join(out_info)))
         else:
-            print "%s | %s" % (" ".join(out_message), " ".join(self.performance_data))
+            print("%s | %s" % (" ".join(out_message), " ".join(self.performance_data)))
         return self.exitcode
 
-    ## set exit code to unknown if it is worse than the last status
+    # set exit code to unknown if it is worse than the last status
     # @param self object pointer
     # @param message message to append to last messages
     # @param performance_data performance data to append to last data
@@ -244,7 +263,7 @@ class NagiosStatus(object):
     def unknown(self, message=None, performance_data=None, info=None):
         self.set_code(self.code["unknown"], message, performance_data, info)
 
-    ## set exit code to critical if it is worse than the last status
+    # set exit code to critical if it is worse than the last status
     # @param self object pointer
     # @param message message to append to last messages
     # @param performance_data performance data to append to last data
@@ -252,7 +271,7 @@ class NagiosStatus(object):
     def critical(self, message=None, performance_data=None, info=None):
         self.set_code(self.code["critical"], message, performance_data, info)
 
-    ## set exit code to warning if it is worse than the last status
+    # set exit code to warning if it is worse than the last status
     # @param self object pointer
     # @param message message to append to last messages
     # @param performance_data performance data to append to last data
@@ -260,7 +279,7 @@ class NagiosStatus(object):
     def warning(self, message=None, performance_data=None, info=None):
         self.set_code(self.code["warning"], message, performance_data, info)
 
-    ## set exit code to ok if it is worse than the last status
+    # set exit code to ok if it is worse than the last status
     # @param self object pointer
     # @param message message to append to last messages
     # @param performance_data performance data to append to last data
@@ -268,13 +287,15 @@ class NagiosStatus(object):
     def ok(self, message=None, performance_data=None, info=None):
         self.set_code(self.code["ok"], message, performance_data, info)
 
-    def generate_performance_data(self, label, value, unit='', warn='', crit='', min='', max=''):
+    @staticmethod
+    def generate_performance_data(label, value, unit='', warn='', crit='', min='', max=''):
         performance_string = '%s=%s%s;%s;%s;%s;%s' % (label.replace(' ', '_'), value, unit, warn, crit, min, max)
         return performance_string
 
-## Plugin Timeout functionality (static class)
+
+# Plugin Timeout functionality (static class)
 class Timeout(object):
-    ## (re)starts the countdown
+    # (re)starts the countdown
     # @param self object pointer
     # @param callback function to call when time runs out. signature: func(signum, frame)
     # @param timeout number of seconds to wait from start, before callback is called
@@ -286,7 +307,7 @@ class Timeout(object):
         else:
             raise ValueError("timeout must be type int and > 0")
 
-    ## stops the countdown
+    # stops the countdown
     # @param self object pointer
     @staticmethod
     def stop():
