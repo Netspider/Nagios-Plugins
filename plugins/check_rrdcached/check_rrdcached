@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import socket
 import sys
@@ -12,7 +12,7 @@ def query(cmd):
         s.connect(socket_path)
         s.send(cmd)
         s.shutdown(socket.SHUT_WR)
-        return s.recv(100000000).splitlines()
+        return s.recv(100000000).decode("utf-8").splitlines()
     except Exception as e:
         print("rrdcached socket not found: {} ({})".format(socket_path, repr(e)))
         sys.exit(3)

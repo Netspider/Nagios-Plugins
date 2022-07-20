@@ -1,12 +1,9 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
 import optparse
-import sys
 import operator
-import imp
-
-nagioslib2 = imp.load_source('nagioslib2', '/usr/lib/nagios/plugins/nagioslib2.py')
+import pyhelper
 
 
 def check_port(option, opt_str, value, parser):
@@ -18,18 +15,17 @@ def check_port(option, opt_str, value, parser):
 
 def parse_options():
     optp = optparse.OptionParser()
-    optp.add_option('--host', dest='host', default=False, help="IP or hostname of the switch")
-    optp.add_option('--community', dest='community', default=False,
-                    help="SNMP Community string (switches to Version 2c if set")
+    optp.add_option('--host', dest='host', help="IP or hostname of the switch")
+    optp.add_option('--community', dest='community', help="SNMP Community string (switches to Version 2c if set")
     optp.add_option('--snmp_port', dest='snmp_port', type='int', action='callback', callback=check_port, default=161,
                     help="SNMP Port. Default: 161")
     optp.add_option('--snmp_version', dest='snmp_version', default='3', help="not used anymore")
-    optp.add_option('--snmp_secName', dest='snmp_secName', default=False, help="SNMP secName")
-    optp.add_option('--snmp_authProtocol', dest='snmp_authProtocol', default=False, help="SNMP authProtocol")
-    optp.add_option('--snmp_authPassword', dest='snmp_authPassword', default=False, help="SNMP authPassword")
-    optp.add_option('--snmp_secLevel', dest='snmp_secLevel', default=False, help="SNMP secLevel")
-    optp.add_option('--snmp_privProtocol', dest='snmp_privProtocol', default=False, help="SNMP privProtocol")
-    optp.add_option('--snmp_privPassword', dest='snmp_privPassword', default=False, help="SNMP privPassword")
+    optp.add_option('--snmp_secName', dest='snmp_secName', help="SNMP secName")
+    optp.add_option('--snmp_authProtocol', dest='snmp_authProtocol', help="SNMP authProtocol")
+    optp.add_option('--snmp_authPassword', dest='snmp_authPassword', help="SNMP authPassword")
+    optp.add_option('--snmp_secLevel', dest='snmp_secLevel', help="SNMP secLevel")
+    optp.add_option('--snmp_privProtocol', dest='snmp_privProtocol', help="SNMP privProtocol")
+    optp.add_option('--snmp_privPassword', dest='snmp_privPassword', help="SNMP privPassword")
     optp.add_option('--temp-warn', dest='temp_warn', type='int', default=50, help="Warning threshold for temperature")
     optp.add_option('--temp-crit', dest='temp_crit', type='int', default=60, help="Critical threshold for temperature")
     optp.add_option('--cpu-warn', dest='cpu_warn', type='int', default=60, help="Warning threshold for CPU")
@@ -37,21 +33,20 @@ def parse_options():
     optp.add_option('--mem-warn', dest='mem_warn', type='int', default=80, help="Warning threshold for RAM")
     optp.add_option('--mem-crit', dest='mem_crit', type='int', default=90, help="Critical threshold for RAM")
     optp.add_option('--no-alert-for-power-supply', dest='no_alert_for_power_supply', action='store_true', default=False,
-                    help="This option disables a warning if some power supplies are faulty or not installed (Cisco)")
+                    help="This option disables a warning if some power supplies are faulty (Cisco)")
 
     opts, args = optp.parse_args()
 
-    if opts.host is False:
-        print("the hostname is required")
-        sys.exit(3)
+    if not opts.host:
+        pyhelper.NagiosStatus.die("unknown", "the hostname is required")
 
-    if opts.community is not False:
-        snmplib = nagioslib2.snmp(host=opts.host, version='2c', port=opts.snmp_port, community=opts.community)
+    if opts.community:
+        snmplib = pyhelper.snmp(host=opts.host, version='2c', port=opts.snmp_port, community=opts.community)
     else:
-        snmplib = nagioslib2.snmp(host=opts.host, version='3', port=opts.snmp_port,
-                                  secName=opts.snmp_secName, authPassword=opts.snmp_authPassword,
-                                  authProtocol=opts.snmp_authProtocol, secLevel=opts.snmp_secLevel,
-                                  privProtocol=opts.snmp_privProtocol, privPassword=opts.snmp_privPassword)
+        snmplib = pyhelper.snmp(host=opts.host, version='3', port=opts.snmp_port, secName=opts.snmp_secName,
+                                authPassword=opts.snmp_authPassword, authProtocol=opts.snmp_authProtocol,
+                                secLevel=opts.snmp_secLevel, privProtocol=opts.snmp_privProtocol,
+                                privPassword=opts.snmp_privPassword)
     return opts, snmplib
 
 
@@ -71,20 +66,62 @@ def check_dell(nagios, opts, snmplib):
     }
     # DELL - Powerconnect
 
-    fans = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.2', bulk=True, dictionary=False)
-    fanstate = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.3', bulk=True, dictionary=False)
-    psu = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.2', bulk=True, dictionary=False)
-    psustate = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.3', bulk=True, dictionary=False)
-    cpuusage = snmplib.get('.1.3.6.1.4.1.674.10895.5000.2.6132.1.1.1.1.4.4.0')
-    model = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.1.0')
-    vendor = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.3.0')
-    switchname = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.7.0')
-    serial = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.8.1.2.1')
-    product_version = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.4.0')
-    build_version = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.5.0')
-    service_tag = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.8.1.4.1')
-    global_status = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.110.1.0')
-    # last_global_status = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.110.2.0')
+    try:
+        fans = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.2', bulk=True, dictionary=False)
+    except OSError:
+        fans = None
+    try:
+        fanstate = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.1.1.3', bulk=True, dictionary=False)
+    except OSError:
+        fanstate = None
+    try:
+        psu = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.2', bulk=True, dictionary=False)
+    except OSError:
+        psu = None
+    try:
+        psustate = snmplib.walk('.1.3.6.1.4.1.674.10895.3000.1.2.110.7.2.1.3', bulk=True, dictionary=False)
+    except OSError:
+        psustate = None
+    try:
+        cpuusage = snmplib.get('.1.3.6.1.4.1.674.10895.5000.2.6132.1.1.1.1.4.4.0')
+    except OSError:
+        cpuusage = None
+    try:
+        model = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.1.0')
+    except OSError:
+        model = None
+    try:
+        vendor = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.3.0')
+    except OSError:
+        vendor = None
+    try:
+        switchname = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.7.0')
+    except OSError:
+        switchname = None
+    try:
+        serial = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.8.1.2.1')
+    except OSError:
+        serial = None
+    try:
+        product_version = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.4.0')
+    except OSError:
+        product_version = None
+    try:
+        build_version = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.5.0')
+    except OSError:
+        build_version = None
+    try:
+        service_tag = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.100.8.1.4.1')
+    except OSError:
+        service_tag = None
+    try:
+        global_status = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.110.1.0')
+    except OSError:
+        global_status = None
+    # try:
+    #    last_global_status = snmplib.get('.1.3.6.1.4.1.674.10895.3000.1.2.110.2.0')
+    # except OSError:
+    #    last_global_status = None
 
     nagios.ok('Model: %s' % model)
     nagios.ok('Vendor: %s' % vendor)
@@ -94,11 +131,21 @@ def check_dell(nagios, opts, snmplib):
     nagios.ok('Build Version: %s' % build_version)
     nagios.ok('ServiceTag: %s' % service_tag)
 
+    try:
+        tmp_stack_units = snmplib.walk('.1.3.6.1.4.1.6027.3.26.1.3.4.1.2', bulk=True, dictionary=False)
+        stack_unit_ids = [el[1] for el in tmp_stack_units]
+        _ = int(stack_unit_ids[0])
+    except (OSError, ValueError):
+        stack_unit_ids = None
+
     # Temperature
     # only one sensor is active, all the others show 0 or 1
     # noinspection PyBroadException
     try:
-        temperature = snmplib.walk('.1.3.6.1.4.1.674.10895.5000.2.6132.1.1.43.1.8.1', bulk=True, dictionary=False)
+        if stack_unit_ids:
+            temperature = snmplib.walk('.1.3.6.1.4.1.6027.3.26.1.3.4.1.13', bulk=True, dictionary=False)
+        else:
+            temperature = snmplib.walk('.1.3.6.1.4.1.674.10895.5000.2.6132.1.1.43.1.8.1', bulk=True, dictionary=False)
         temp = int(max(temperature, key=operator.itemgetter(1))[1])
         if opts.temp_warn <= temp < opts.temp_crit:
             nagios.warning('Temperature: %s°C' % temp)
@@ -153,6 +200,28 @@ def check_dell(nagios, opts, snmplib):
             nagios.critical('Globalstatus: %s' % unitstate[global_status])
     except Exception:
         nagios.ok("Globalstatus: ???")
+
+    # switch stack status
+    if stack_unit_ids:
+        stack_unit_status = {
+            '1': 'ok',
+            '2': 'unsupported',
+            '3': 'codeMismatch',
+            '4': 'configMismatch',
+            '5': 'unitDown',
+            '6': 'notPresent',
+        }
+        try:
+            stack_status = snmplib.walk('.1.3.6.1.4.1.6027.3.26.1.3.4.1.8', bulk=True, dictionary=False)
+            for unit, state in stack_status:
+                unit_id = unit.rsplit('.', 1)[1]
+                if stack_unit_status[state] == 'ok':
+                    nagios.ok('Unit{}Status: ok'.format(unit_id))
+                else:
+                    nagios.critical('Unit{}Status: {}'.format(unit_id, stack_unit_status[state]))
+        except OSError:
+            pass
+            # nagios.unknown('stack status: ???')
 
     # CPU usage
     # noinspection PyBroadException
@@ -272,7 +341,7 @@ def check_hp(nagios, opts, snmplib):
     try:
         devicehealth = health[snmplib.get('.1.3.6.1.4.1.11.2.36.1.1.5.1.1.3.1')]
 
-        if devicehealth is not 'ok':
+        if devicehealth != 'ok':
             nagios.warning("device status: %s" % devicehealth)
         else:
             nagios.ok("device status: %s" % devicehealth)
@@ -422,6 +491,9 @@ def check_cisco(nagios, opts, snmplib):
 
             if psu_state != 'normal':
                 psus_not_ok += 1
+                if psu_state == 'notPresent':
+                    nagios.ok("power supply: '%s' --> %s " % (psu_descr, psu_state))
+                    continue
                 if not opts.no_alert_for_power_supply:
                     nagios.critical("power supply: '%s' --> %s " % (psu_descr, psu_state))
 
@@ -453,7 +525,8 @@ def check_cisco(nagios, opts, snmplib):
                 nagios.critical("temperature: '%s' --> %s (%s°C)" % (tsensor_descr, tsensor_state, tsensor_value))
 
             nagios.ok(performance_data="temp_%s=%sC" % (
-                tsensor_descr.rsplit(',', 1)[0].replace(' ', '_').translate(None, '"#,'), tsensor_value))
+                tsensor_descr.rsplit(',', 1)[0].replace(' ', '_').translate(str.maketrans("", "", '"#,')),
+                tsensor_value))
 
     if tsensors == 1:
         nagios.ok("1 temperature sensor (Status: ok)")
@@ -491,7 +564,7 @@ def check_3com(nagios, opts, snmplib):
 
 
 def check_switch_status(opts, snmplib):
-    nagios = nagioslib2.NagiosStatus("Switch")
+    nagios = pyhelper.NagiosStatus("Switch")
 
     device = snmplib.identify_vendor()[0]
     # noinspection PyBroadException

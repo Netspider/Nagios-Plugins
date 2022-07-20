@@ -12,11 +12,26 @@ plugins
 ```
 Pull requests for missing functionality are welcome!
 
-## nagioslib2
+## pyhelper
+
 This library is needed by some of the plugins used here. It provides easy access to the Nagios plugin api.
 
+Rename the library to `pyhelper.py`  and put it in the site-packages directory:
+
+```python
+import site
+print(site.getsitepackages()[0])
+```
+
+## nagioslib2
+
+***(deprecated)*** This library is needed by some of the plugins used here. It provides easy access to the Nagios plugin api.
+
+
+
 ## check\_redis
-This plugin return many metrics and checks if a random key can be saved in redis and if it has the same value after reading it again.
+
+This plugin returns many metrics and checks if a random key can be saved in redis and if it has the same value after reading it again.
 
 *Written in Go*
 
@@ -74,7 +89,7 @@ check_smart=/usr/lib/nagios/plugins/check_smart
 ## check\_squid
 Collects a ton of statistics from Squid. Warns if median service time (time to deliver pages) reaches a threshold.
 
-*Written in Python 2*
+*Written in Python 2, uses pyhelper*
 
 ```
 define service {
@@ -92,8 +107,7 @@ check_squid=/usr/lib/nagios/plugins/check_squid $ARG1$
 ## check\_switch-status
 Reads switch metrics using SNMP.
 
-*Written in Python 2*<br>
-*uses nagioslib2*
+*Written in Python 2, uses pyhelper*
 
 ```
 define service{
@@ -138,8 +152,7 @@ check_temp_sensors=/usr/lib/nagios/plugins/check_temp_sensors
 ## check\_traffic
 Checks network traffic and warns about too many retransmits and network errors. Provides many metrics.
 
-*Written in Python &ge; 2.7*<br>
-*uses nagioslib2*
+*Written in Python &ge; 2.7, uses pyhelper*
 
 ```
 define service {

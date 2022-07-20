@@ -5,7 +5,7 @@ import argparse
 import re
 import time
 import pickle
-import imp
+import pyhelper
 
 
 class NetworkData(object):
@@ -54,7 +54,7 @@ class NetworkData(object):
         content = open('/proc/net/dev', 'r').readlines()
         content = content[2:]  # ignore 2 header lines
         for line in content:
-            elements = re.findall(r'(\b[^\s]+\b)', line)
+            elements = re.findall(r'(\b\S+\b)', line)
             if len(elements) > 0:
                 interface = elements[0]
                 data[interface] = {}
@@ -94,6 +94,7 @@ class NetworkData(object):
         if interface in self.override_bandwidth:
             return self.override_bandwidth[interface]
         else:
+            # noinspection PyBroadException
             try:
                 return int(open("/sys/class/net/{}/speed".format(interface)).read().strip())
             except Exception:
@@ -153,8 +154,7 @@ def main():
     parser.add_argument('--crit_retransmitted', dest='crit_retransmitted', action='store', type=to_int, default=2,
                         help="critical limit for retransmits in percent / Default = 2")
 
-    nagioslib = imp.load_source("nagioslib2", "/usr/lib/nagios/plugins/nagioslib2.py")
-    nagios = nagioslib.NagiosStatus("Traffic")
+    nagios = pyhelper.NagiosStatus("Traffic")
 
     args = parser.parse_args()
 
@@ -202,6 +202,7 @@ def read_data(directory):
 
 def calc_rate(nagios, network_data, directory):
     traffic_old = {}
+    # noinspection PyBroadException
     try:
         traffic_old = read_data(directory)
     except Exception:
@@ -272,6 +273,7 @@ def calc_rate(nagios, network_data, directory):
 def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_traffic_pct, crit_traffic_pct,
                   warn_error_pct, crit_error_pct, warn_retransmitted_pct, crit_retransmitted_pct):
 
+    # noinspection PyBroadException
     try:
         results = calc_rate(nagios, network_data, directory)
 
@@ -302,8 +304,8 @@ def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_tra
                     unit='Mbps',
                     warn=data['warn_bw'],
                     crit=data['crit_bw'],
-                    min=0,
-                    max=data['max_bw'],
+                    minimum=0,
+                    maximum=data['max_bw'],
                 ))
 
                 nagios.ok(performance_data=nagios.generate_performance_data(
@@ -312,8 +314,8 @@ def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_tra
                     unit='Mbps',
                     warn=data['warn_bw'],
                     crit=data['crit_bw'],
-                    min=0,
-                    max=data['max_bw'],
+                    minimum=0,
+                    maximum=data['max_bw'],
                 ))
 
                 if data['mbit_rx'] >= data['warn_bw']:
@@ -358,8 +360,8 @@ def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_tra
                 unit='%',
                 warn=warn_error_pct,
                 crit=crit_error_pct,
-                min=0,
-                max=100,
+                minimum=0,
+                maximum=100,
             ))
             nagios.ok(performance_data=nagios.generate_performance_data(
                 label="{}_TX_error".format(interface),
@@ -367,8 +369,8 @@ def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_tra
                 unit='%',
                 warn=warn_error_pct,
                 crit=crit_error_pct,
-                min=0,
-                max=100,
+                minimum=0,
+                maximum=100,
             ))
 
         if results['retransmitted'] >= warn_retransmitted_pct:
@@ -383,8 +385,8 @@ def nagios_output(nagios, network_data, interfaces_no_alarm, directory, warn_tra
             unit='%',
             warn=warn_retransmitted_pct,
             crit=crit_retransmitted_pct,
-            min=0,
-            max=100,
+            minimum=0,
+            maximum=100,
         ))
 
         if nagios.exitcode == nagios.code["ok"]:
