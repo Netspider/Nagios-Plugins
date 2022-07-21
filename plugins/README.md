@@ -29,6 +29,46 @@ print(site.getsitepackages()[0])
 
 
 
+## check_cpu-usage
+
+This plugin displays the cpu and IO usage.
+
+*Written in Python*
+
+```
+define service {
+    host_name               server
+    service_description     CPU usage
+    check_command           check_by_ssh!check_cpu-usage!"--iowait_warn 20"
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_cpu-usage=/usr/lib/nagios/plugins/check_cpu-usage.py $ARG1$
+```
+
+## check_logstash
+
+This plugin connects to the logstash management port and checks if logstash can deliver documents to its output.
+
+*Written in Python 3*
+
+```
+define service {
+    host_name               server
+    service_description     Logstash Status
+    check_command           check_by_ssh!check_logstash!"--suppress-geoip"
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_logstash=/usr/lib/nagios/plugins/check_logstash $ARG1$
+```
+
 ## check\_redis
 
 This plugin returns many metrics and checks if a random key can be saved in redis and if it has the same value after reading it again.

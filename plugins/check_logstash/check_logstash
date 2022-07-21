@@ -1,0 +1,208 @@
+#!/usr/bin/python3
+
+import argparse
+import pyhelper
+import requests
+import json
+import os
+
+
+def parse_args():
+    # http://localhost:9600/_node/stats/
+    argp = argparse.ArgumentParser()
+    argp.add_argument("-H", "--hostname", dest="hostname", action="store", default="localhost", type=str,
+                      help="Logstash Management Hostname (default: localhost)")
+    argp.add_argument("-p", "--port", dest="port", action="store", default=9600, type=int,
+                      help="Logstash Management Port (default: 9600)")
+    argp.add_argument("--path", dest="path", action="store", default="/_node/stats", type=str,
+                      help="Logstash Management Path (default: /_node/stats)")
+    argp.add_argument("--ssl", dest="use_ssl", action="store_true", default=False,
+                      help="use SSL (default: no)")
+    argp.add_argument("--statsfile", dest="statsfile", action="store", default="/tmp/check_logstash.pickle", type=str,
+                      help="Temporary data file (default: /tmp/check_logstash.pickle")
+    argp.add_argument("-o", "--open-files-crit", dest="open_files_pct", action="store", default=90, type=int,
+                      help="Percent of max open files used (default: 90)")
+    argp.add_argument("--suppress-geoip", dest="suppress_geoip", action="store_true", default=False,
+                      help="disable warning if geoip check fails (default: false)")
+    argp.add_argument("--queue-events-warn", dest="events_warn", action="store", default=1, type=int,
+                      help="Number of events in output queue for warning alert (default: 1)")
+    argp.add_argument("--queue-events-crit", dest="events_crit", action="store", default=1000, type=int,
+                      help="Number of events in output queue for critical alert (default: 1000)")
+    return argp.parse_args()
+
+
+def get_data(url, status):
+    r = None
+    try:
+        r = requests.get(url)
+    except requests.exceptions.ConnectionError as e:
+        status.die("critical", "Could not connect to Logstash: {}".format(e))
+
+    if r.status_code != 200:
+        status.die("critical", "Logstash returned code {}: {}".format(r.status_code, r.reason))
+
+    try:
+        return r.json()
+    except json.decoder.JSONDecodeError:
+        status.die("critical", "Could not parse json from Logstash")
+
+
+def get_data_test(url, status):
+    _ = url
+    _ = status
+    return json.loads(open("logstash.json").read())
+
+
+def check_geoip_download_manager(data, args, status):
+    msg_type = "ok" if args.suppress_geoip else "warning"
+    if "geoip_download_manager" in data:
+        if data["geoip_download_manager"]["download_stats"]["status"] == "failed":
+            status.set_code(msg_type, "GeoIPDB could not be downloaded at {}".format(
+                data["geoip_download_manager"]["download_stats"]["last_checked_at"]))
+        else:
+            status.ok("GeoIPDB up to date")
+
+
+def check_dead_letter_queue(data, args, status):
+    _ = args
+    if "pipelines" in data:
+        dlq_sum = 0
+        for pipeline in data["pipelines"]:
+            if "dead_letter_queue" in data["pipelines"][pipeline]:
+                dlq_sum += data["pipelines"][pipeline]["dead_letter_queue"]["queue_size_in_bytes"] - 1
+        if dlq_sum > 0:
+            status.warning("dead letter queue has {} bytes".format(dlq_sum),
+                           performance_data=status.generate_performance_data(
+                               label="dead_letter_bytes",
+                               value=dlq_sum,
+                               minimum=0,
+                               warn=1,
+                           ))
+
+
+def check_jvm(data, args, status):
+    _ = args
+    if "jvm" in data:
+        m = data["jvm"]["mem"]
+        status.ok(performance_data=status.generate_performance_data(
+            label="heap_used_in_bytes",
+            value=m["heap_used_in_bytes"],
+            minimum=0,
+            maximum=m["heap_max_in_bytes"],
+        ))
+
+
+def check_pipeline_outputs(data, args, status):
+    if "pipelines" in data:
+        rate = dict()
+        for pipeline in data["pipelines"]:
+            for output in data["pipelines"][pipeline]["plugins"]["outputs"]:
+                if "documents" in output:
+                    try:
+                        rate["output_{}_{}_doc_failure".format(pipeline, output["name"])] = \
+                            output["documents"]["non_retryable_failures"]
+                    except KeyError:
+                        rate["output_{}_{}_doc_failure".format(pipeline, output["name"])] = 0
+
+                    try:
+                        rate["output_{}_{}_doc_success".format(pipeline, output["name"])] = \
+                            output["documents"]["successes"]
+                    except KeyError:
+                        rate["output_{}_{}_doc_success".format(pipeline, output["name"])] = 0
+
+        try:
+            data_rate = pyhelper.rate.calc(args.statsfile, rate)
+        except EOFError:
+            os.remove(args.statsfile)
+            # status.die("unknown", "Pickle-File damaged. After 2 more runs it will be fine.")
+            return
+
+        for el in data_rate:
+            if el.startswith("output"):
+                try:
+                    status.ok(performance_data=status.generate_performance_data(
+                        label=el,
+                        value=float(data_rate[el]),
+                    ))
+                except ValueError:
+                    continue
+
+
+def check_status(data, args, status):
+    _ = args
+    if "status" in data:
+        if data["status"] == "green":
+            status.ok("status is green")
+        elif data["status"] in ("yellow", "warn", "warning"):  # don't know the correct value
+            status.warning("status is {}".format(data["status"]))
+        else:
+            status.critical("stats is {}".format(data["status"]))
+
+
+def check_process(data, args, status):
+    if "process" in data:
+        open_files = data["process"]["open_file_descriptors"]
+        max_files = data["process"]["max_file_descriptors"]
+        if open_files*100 / max_files >= args.open_files_pct:
+            status.critical("{}% of file descriptors used ({}/{})".format(
+                open_files*100/max_files, open_files, max_files))
+
+        status.ok(performance_data=status.generate_performance_data(
+            label="open_files",
+            value=open_files,
+            maximum=max_files,
+            minimum=0,
+            crit=int(max_files * args.open_files_pct/100),
+        ))
+
+
+def check_queue(data, args, status):
+    if "queue" in data:
+        events_count = data["queue"]["events_count"]
+        if events_count >= args.events_crit:
+            msg_type = "critical"
+        elif args.events_warn <= events_count < args.events_crit:
+            msg_type = "warning"
+        else:
+            msg_type = "ok"
+
+        status.set_code(
+            msg_type,
+            "{} events in output queue".format(events_count),
+            performance_data=status.generate_performance_data(
+                label="queue_events",
+                value=events_count,
+                warn=args.events_warn,
+                crit=args.events_crit,
+                minimum=0,
+            ))
+
+
+def main():
+    args = parse_args()
+    status = pyhelper.NagiosStatus("Logstash")
+    url = "{proto}://{host}:{port}{path}".format(
+        proto="https" if args.use_ssl else "http",
+        host=args.hostname,
+        port=args.port,
+        path=args.path
+    )
+    data = {}
+    try:
+        data = get_data(url, status)
+    except Exception as e:
+        status.die("unknown", "unknown error: {}".format(e))
+
+    check_geoip_download_manager(data, args, status)
+    check_dead_letter_queue(data, args, status)
+    check_jvm(data, args, status)
+    check_pipeline_outputs(data, args, status)
+    check_status(data, args, status)
+    check_process(data, args, status)
+    check_queue(data, args, status)
+
+    status.exit()
+
+
+if __name__ == "__main__":
+    main()

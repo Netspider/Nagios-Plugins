@@ -1,0 +1,150 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import optparse
+import pickle
+import re
+import time
+import pyhelper
+
+# columnd headers for /proc/stat (order is important) !
+COLUMNS = ["user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal", "guest", "guest_nice"]
+
+max_time_range = 24 * 60 * 60  # values older than this will be deleted from the dump
+min_time_range = 20 * 60 * 60  # values younger than this will be used for calculation
+
+
+def main():
+    optp = optparse.OptionParser()
+    optp.add_option('-f', '--statefile', dest='state_file', action='store', default='/tmp/cpu-usage.dump',
+                    help="directory for saving the state file (Default: /tmp/cpu-usage.dump)")
+
+    for i in COLUMNS:
+        optp.add_option('--%s_warn' % i, type="int", dest='%s_warn' % i, action='store', default=None,
+                        help="warning limit for %s in percent (Default: 100)" % i)
+        optp.add_option('--%s_crit' % i, type="int", dest='%s_crit' % i, action='store', default=None,
+                        help="critical limit for %s in percent (Default: 100)" % i)
+
+    opts, args = optp.parse_args()
+    limits = vars(opts)
+
+    for i in COLUMNS:
+        if limits[i + "_warn"] is not None:
+            if not (0 <= limits[i + "_warn"] <= 100):
+                pyhelper.NagiosStatus.die("unknown", "value %s_warn must be between 0 and 100." % i)
+
+        if limits[i + "_crit"] is not None:
+            if not (0 <= limits[i + "_crit"] <= 100):
+                pyhelper.NagiosStatus.die("unknown", "value %s_crit must be between 0 and 100." % i)
+
+    calculation(opts.state_file, limits)
+
+
+def extract_data():
+    data = {}
+
+    cpu_gesamt = [line.strip() for line in open("/proc/stat").readlines() if line.startswith("cpu ")]
+    cpu_gesamt_part = re.split(r'\s+', cpu_gesamt[0])
+    timestamp = time_now()
+    data[timestamp] = {}
+
+    for i, j in enumerate(COLUMNS):
+        try:
+            data[timestamp][j] = cpu_gesamt_part[i + 1]
+
+        except IndexError:
+            data[timestamp][j] = 0
+    return data
+
+
+def save_data(path, data):
+    pickle.dump(data, open(path, "wb"))
+
+
+def read_data(path):
+    # noinspection PyBroadException
+    try:
+        return pickle.load(open(path, "rb"))
+    except Exception:
+        save_data(path, extract_data())
+        pyhelper.NagiosStatus.die("unknown", "Pickle-File was corrupt, should be fixed in the next run -> %s" % path)
+
+
+def calculation(path, limits):
+    status = pyhelper.NagiosStatus("CPU USAGE")
+    timestamp = time_now()
+    time_wanted_diff = 0
+
+    data_old_all = dict()
+    try:
+        data_old_all = read_data(path)
+    except IOError:
+        save_data(path, extract_data())
+        pyhelper.NagiosStatus.die("unknown", "First run or could not read file %s" % path)
+    except EOFError as e:
+        save_data(path, extract_data())
+        pyhelper.NagiosStatus.die("unknown", "Could not read dump: %s" % e)
+
+    data_new = extract_data()
+
+    data = {}
+    data_diff = {}
+    timestamp_max = int(timestamp) - int(max_time_range)
+    timestamp_min = int(timestamp) - int(min_time_range)
+    data_new_key = min(data_new.keys())
+
+    data_old = {}
+    for element in data_old_all.keys():
+        if element >= timestamp_max:
+            data_old[element] = data_old_all[element]
+
+    if len(data_old) <= 0:
+        save_data(path, data_new)
+        pyhelper.NagiosStatus.die("unknown", "Old data, will be fixed in next run")
+
+    data_old_key = min(data_old.keys())
+
+    if int(data_old_key) < int(timestamp_min):
+
+        for i in data_new[data_new_key].keys():
+            data_diff[i] = int(data_new[data_new_key][i]) - int(data_old[data_old_key][i])
+        data_sum = sum(data_diff.values())
+
+        for i in data_diff.keys():
+            data[i] = (data_diff[i] * 100.0) / data_sum
+
+    else:
+        time_wanted_diff = int(data_old_key) - int(timestamp_min)
+
+    data_old.update(data_new)
+    try:
+        save_data(path, data_old)
+    except IOError as e:
+        pyhelper.NagiosStatus.die("unknown", "Could not write dump to '%s': %s" % (path, e))
+
+    for i in COLUMNS:
+        status.ok(performance_data=status.generate_performance_data(label=i, value=data_new[data_new_key][i]))
+
+    if len(data) != 0:
+        for i in COLUMNS:
+            if limits[i + '_crit'] is not None:
+                if int(data[i]) >= int(limits[i + '_crit']):
+                    status.critical("%s:%.2f%%" % (i, data[i]))
+                    continue
+
+            if limits[i + '_warn'] is not None:
+                if int(data[i]) >= int(limits[i + '_warn']):
+                    status.warning("%s:%.2f%%" % (i, data[i]))
+
+    if time_wanted_diff != 0:
+        status.ok("data can be calculated in %d seconds" % time_wanted_diff)
+
+    status.exit()
+
+
+def time_now():
+    return int(time.mktime(time.localtime()))
+
+
+if __name__ == "__main__":
+    main()
