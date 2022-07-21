@@ -1,0 +1,173 @@
+#! /usr/bin/python3
+# -*- coding: utf-8 -*-
+
+import re
+import socket
+import pyhelper
+import requests
+try:
+    # python3.4 (Deb8) does not have typing
+    # python3.5 (Deb9) does not have typing.NoReturn
+    # that's why I am using type comments instead of annotations
+    # noinspection PyUnresolvedReferences
+    from typing import NoReturn, Optional, Tuple
+except ImportError:
+    pass
+
+
+def detect_vm():
+    # type: () -> str
+    # noinspection PyBroadException
+    try:
+        try:
+            stdout, _, ret = pyhelper.external.run(["systemd-detect-virt"], shell=False)
+            stdout = stdout.decode("utf-8")
+            if stdout.strip() and ret == 0:
+                return "Yes, VM-type: {}".format(stdout.strip())
+            else:
+                return "No"
+        except OSError:
+            pass
+        stdout, _, _ = pyhelper.external.run(["/usr/bin/lspci"], shell=False)
+        stdout = stdout.decode("utf-8")
+        if 'Virtio' in stdout or 'Qumranet' in stdout:
+            return "Yes, VM-type: KVM"
+        elif 'VMware' in stdout:
+            return "Yes, VM-type: VMware"
+        else:
+            try:
+                data = open('/sys/hypervisor/type').read()
+                return "Yes, VM-type: %s" % data.strip()
+            except IOError:
+                return "No"
+    except Exception:
+        return "Unknown"
+
+
+def get_cpu_stats():
+    # type: () -> str
+    # noinspection PyBroadException
+    try:
+        cpuinfo = open("/proc/cpuinfo", "r").readlines()
+        num_models = 0
+        num_cores = 0
+        num_siblings = 0
+        model = "Unknown"
+        phys_ids = set()
+        for line in cpuinfo:
+            try:
+                key, value = line.split(":", 1)
+            except ValueError:
+                continue
+            key = key.strip()
+            value = value.strip()
+
+            if key == "model name":
+                # change multiple spaces to one:
+                model = " ".join(value.split())
+                num_models += 1
+            elif key == "physical id":
+                phys_ids.add(value)
+            elif key == "cpu cores":
+                num_cores = value
+            elif key == "siblings":
+                num_siblings = value
+
+        if "QEMU" in model:
+            return "%sx %s" % (num_models, model)
+        num_cpus = len(phys_ids)
+        # If the number of cores == the number of siblings for a given physical processor,
+        # then hyperthreading is OFF.
+        if num_siblings == num_cores:
+            ht = False
+        else:
+            ht = True
+        if num_cpus == 0:
+            return "1x {}".format(model)
+        elif ht:
+            return "{}x {} ({}cores + HT)".format(num_cpus, model, num_cores)
+        else:
+            return "{}x {} ({}cores)".format(num_cpus, model, num_cores)
+    except Exception:
+        return "Unknown"
+
+
+def detect_uptime():
+    # type: () -> str
+    # noinspection PyBroadException
+    try:
+        stdout, _, _ = pyhelper.external.run(["uptime"], shell=False)
+        stdout = stdout.decode("utf-8")
+        data = re.search(r".*?up (.*?),", stdout)
+        if data:
+            return data.group(1).strip()
+        else:
+            return "Unknown"
+    except Exception:
+        return 'Unknown'
+
+
+def detect_os():
+    # type: () -> Tuple[str, str]
+    try:
+        import distro  # python3-distro exists in D9+
+        os_name = distro.name()
+        os_version = distro.version()
+    except (ImportError, AttributeError):
+        import platform  # platform.dist() up to D10 (python3.7)
+        os_name, os_version, _ = platform.dist()
+
+    if os_name.lower() == 'debian':
+        # debian version name
+        os_codenames = {
+            '3.0': 'Woody',
+            '3.1': 'Sarge',
+            '4.':  'Etch',
+            '5.':  'Lenny',
+            '6.':  'Squeeze',
+            '7.':  'Wheezy',
+            '8.':  'Jessie',
+            '9.':  'Stretch',
+            '10.': 'Buster',
+            '11.': 'Bullseye',
+            '12.': 'Bookworm',
+        }
+
+        os_codename = 'Unknown Version'
+        for deb in os_codenames:
+            if os_version.startswith(deb):
+                os_codename = os_codenames[deb]
+                break
+        name = "Debian {}".format(os_codename)
+    else:
+        name = os_name
+    return name, os_version
+
+
+def detect_aws_instance_type():
+    # type: () -> Optional[str]
+    try:
+        return requests.get('http://169.254.169.254/latest/meta-data/instance-type', timeout=5).text
+    except OSError:
+        return None
+
+
+def main():
+    status = pyhelper.NagiosStatus("HostInfo")
+
+    vm_type = detect_vm()
+    status.ok("VM: %s" % detect_vm())
+    status.ok("Uptime: %s" % detect_uptime())
+    status.ok("CPU: %s" % get_cpu_stats())
+    status.ok("OS: Linux %s %s" % detect_os())
+    status.ok("Hostname: %s" % socket.getfqdn())
+    if "xen" in vm_type.lower() or "kvm" in vm_type.lower():
+        aws_type = detect_aws_instance_type()
+        if aws_type:
+            status.ok("AWS-InstanceType: %s" % aws_type)
+
+    status.exit()
+
+
+if __name__ == "__main__":
+    main()

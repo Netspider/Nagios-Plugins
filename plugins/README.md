@@ -46,7 +46,43 @@ define service {
 
 ```
 # NRPE / ssh-agent
-check_cpu-usage=/usr/lib/nagios/plugins/check_cpu-usage.py $ARG1$
+check_cpu-usage=/usr/lib/nagios/plugins/check_cpu-usage $ARG1$
+```
+
+## check_diskstats
+
+*Written in Python*
+
+```
+define service {
+    host_name               server
+    service_description     Diskstats
+    check_command           check_by_ssh_1arg!check_diskstats
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_diskstats=/usr/lib/nagios/plugins/check_diskstats
+```
+
+## check_host-info
+
+*Written in Python*
+
+```
+define service{
+    host_name               server
+    service_description     Host Info
+    check_command           check_by_ssh_1arg!check_host-info
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_host-info=/usr/lib/nagios/plugins/check_host-info
 ```
 
 ## check_logstash

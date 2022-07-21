@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+
+# https://www.kernel.org/doc/Documentation/ABI/testing/procfs-diskstats
+
+import re
+import pyhelper
+from os.path import exists
+
+
+def main():
+    status = pyhelper.NagiosStatus("DiskStats")
+    hdd_values = {}
+    hdd_amount = 0
+    hdds = []
+    for line in open("/proc/diskstats").readlines():
+        values = line.split()
+        # only add to list if it is a real device
+        # e.g. sda sdb
+        if exists('/sys/block/%s' % values[2]) and re.match(r'(sd|hd|vd|xvd)[a-z]', values[2]):
+            hdd_amount += 1
+            hdd_name = values[2]
+            hdds.append(values[2])
+            hdd_values[hdd_name + '-read_ios'] = values[3]
+            hdd_values[hdd_name + '-read_merges'] = values[4]
+            hdd_values[hdd_name + '-read_sectors'] = values[5]
+            hdd_values[hdd_name + '-read_ticks'] = values[6]
+            hdd_values[hdd_name + '-write_ios'] = values[7]
+            hdd_values[hdd_name + '-write_merges'] = values[8]
+            hdd_values[hdd_name + '-write_sectors'] = values[9]
+            hdd_values[hdd_name + '-write_ticks'] = values[10]
+            hdd_values[hdd_name + '-in_flight'] = values[11]
+            hdd_values[hdd_name + '-io_ticks'] = values[12]
+            hdd_values[hdd_name + '-time_in_queue'] = values[13]
+
+    # calculate number per seconds
+    try:
+        device_rate = pyhelper.rate.calc('/tmp/check_diskstats.tmp', hdd_values)
+    except IOError as e:
+        status.die("unknown", repr(e))
+
+    for hdd in hdds:
+        if not isinstance(hdd_values[hdd + '-in_flight'], int):
+            # noinspection PyUnboundLocalVariable
+            device_rate[hdd + '-in_flight'] = 0
+        else:
+            device_rate[hdd + '-in_flight'] = int(hdd_values[hdd + '-in_flight'])
+
+    if any(v == "" for v in device_rate.values()):
+        status.ok('Empty Value')
+    else:
+        status.ok("%s HDD%s found" % (hdd_amount, "" if hdd_amount == 1 else "s"))
+        status.ok("IOPS: %s" % " ".join(
+            ["%s@%d" % (hdd, device_rate[hdd + '-read_ios'] + device_rate[hdd + '-write_ios']) for hdd in hdds]
+        ))
+
+        nagios_string = "Scheduler: "
+        for hdd in hdds:
+            # noinspection PyBroadException
+            try:
+                scheduler = open("/sys/block/%s/queue/scheduler" % hdd).read()
+                if re.search(r"^none", scheduler):
+                    nagios_string += '%s@none ' % hdd
+                    continue
+                scheduler_type = re.findall(r"\[(.*)]", scheduler)
+                if scheduler_type:
+                    nagios_string += '%s@%s ' % (hdd, scheduler_type[0])
+                else:
+                    nagios_string += '%s@unknown ' % hdd
+            except Exception:
+                nagios_string += '%s@unknown ' % hdd
+
+        status.ok(nagios_string)
+
+        for key, value in sorted(device_rate.items()):
+            status.ok(performance_data=status.generate_performance_data(label=key, value=value))
+
+    status.exit()
+
+
+if __name__ == "__main__":
+    main()
