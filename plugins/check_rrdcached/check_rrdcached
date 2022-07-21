@@ -2,15 +2,15 @@
 
 import socket
 import sys
+from typing import List
 
-socket_path = "/var/run/rrdcached.sock"
 
-
-def query(cmd):
+def query(cmd: str) -> List[str]:
+    socket_path = "/var/run/rrdcached.sock"
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(socket_path)
-        s.send(cmd)
+        s.send(cmd.encode("utf-8"))
         s.shutdown(socket.SHUT_WR)
         return s.recv(100000000).decode("utf-8").splitlines()
     except Exception as e:
@@ -27,4 +27,4 @@ def main():
 
 
 if __name__ == "__main__":
-        main()
+    main()
