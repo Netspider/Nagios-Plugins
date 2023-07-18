@@ -16,24 +16,20 @@ Pull requests for missing functionality are welcome!
 
 This library is needed by some of the plugins used here. It provides easy access to the Nagios plugin api.
 
-Rename the library to `pyhelper.py`  and put it in the site-packages directory:
+Rename the library to `pyhelper.py`  and copy it in the site-packages directory:
 
 ```python
-import site
-print(site.getsitepackages()[0])
+# for all users:
+python -c 'import site; print(site.getsitepackages()[0])'
+# OR for the monitoring user:
+sudo -u nagios python -c 'import site; print(site.getusersitepackages())'
 ```
-
-## nagioslib2
-
-***(deprecated)*** This library is needed by some of the plugins used here. It provides easy access to the Nagios plugin api.
-
-
 
 ## check_connections
 
 This plugin displays the number of TCP/UDP connections in their states.
 
-*Written in Python*
+*Written in Python, uses pyhelper*
 
 ```
 define service {
@@ -53,7 +49,7 @@ check_connections=/usr/lib/nagios/plugins/check_connections
 
 This plugin displays the cpu and IO usage.
 
-*Written in Python*
+*Written in Python, uses pyhelper*
 
 ```
 define service {
@@ -71,7 +67,7 @@ check_cpu-usage=/usr/lib/nagios/plugins/check_cpu-usage $ARG1$
 
 ## check_diskstats
 
-*Written in Python*
+*Written in Python, uses pyhelper*
 
 ```
 define service {
@@ -89,7 +85,7 @@ check_diskstats=/usr/lib/nagios/plugins/check_diskstats
 
 ## check_host-info
 
-*Written in Python*
+*Written in Python, uses pyhelper*
 
 ```
 define service{
@@ -109,7 +105,7 @@ check_host-info=/usr/lib/nagios/plugins/check_host-info
 
 This plugin connects to the logstash management port and checks if logstash can deliver documents to its output.
 
-*Written in Python 3*
+*Written in Python 3, uses pyhelper*
 
 ```
 define service {
@@ -129,7 +125,7 @@ check_logstash=/usr/lib/nagios/plugins/check_logstash $ARG1$
 
 This plugin gathers ram/swap related statistics.
 
-*Written in Python*
+*Written in Python, uses pyhelper*
 
 ```
 define service {
