@@ -1,0 +1,140 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import optparse
+import pyhelper
+
+
+def to_mb(byte):
+    return int(round((byte / 1024 / 1024), 0))
+
+
+def parse_threshold(value):
+    w, c = value.split(",")
+    return int(w), int(c)
+
+
+def parse_options():
+    optp = optparse.OptionParser()
+    optp.add_option('-w', dest='warn', action='store', default='80,20',
+                    help="Warning in % for Memory/Swap --> e.g. '-w 90,30' (90% Memory, 30% Swap)")
+    optp.add_option('-c', dest='crit', action='store', default='90,30',
+                    help="Critical in % for  Memory/Swap --> usage like -w")
+    opts, args = optp.parse_args()
+
+    warn_threshold = parse_threshold(opts.warn)
+    crit_threshold = parse_threshold(opts.crit)
+
+    return warn_threshold, crit_threshold
+
+
+def from_percent(total, percent):
+    return int(round(total/100.0 * percent))
+
+
+def to_percent(part, total):
+    try:
+        return int(round(part * 100.0 / total))
+    except ZeroDivisionError:
+        return 0
+
+
+def fetch_memory_data():
+    data = {}
+    raw_data = open('/proc/meminfo', 'r').read().split('\n')
+    for line in raw_data:
+        if line.strip() != '':
+            values = line.split()
+            # KB -> Byte
+            data[values[0][:-1]] = int(values[1]) * 1024
+    return data
+
+
+def add_perfdata(data, status):
+    for name in data:
+        if not data[name] is None:
+            status.ok(performance_data="%s=%s" % (name, data[name]))
+
+
+def check_thresholds(value, warning, critical):
+    if warning < value <= critical:
+        return pyhelper.NagiosStatus.code["warning"]
+    elif value > critical:
+        return pyhelper.NagiosStatus.code["critical"]
+    else:
+        return pyhelper.NagiosStatus.code["ok"]
+
+
+def get_data(which, d, warn, crit):
+    data = dict()
+    if which == "Mem":
+        data["name"] = "Memory"
+        data["free"] = d["MemFree"] + d["Cached"] + d["Buffers"]
+    else:
+        which = "Swap"
+        data["name"] = "Swap"
+        data["free"] = d["SwapFree"]
+
+    data["total"] = d["%sTotal" % which]
+    data["used"] = data["total"] - data["free"]
+    data["total_mb"] = to_mb(data["total"])
+    data["free_mb"] = to_mb(data["free"])
+    data["used_mb"] = to_mb(data["used"])
+    data["used_percent"] = to_percent(data["used"], data["total"])
+    data["warning"] = warn
+    data["critical"] = crit
+    data["warning_bytes"] = from_percent(data["total"], data["warning"])
+    data["critical_bytes"] = from_percent(data["total"], data["critical"])
+
+    return data
+
+
+def main():
+    warn, crit = parse_options()
+    d = fetch_memory_data()
+    status = pyhelper.NagiosStatus("Memory")
+
+    mem_data = get_data("Mem", d, warn[0], crit[0])
+    swap_data = get_data("Swap", d, warn[1], crit[1])
+
+    msg = "%(name)s Usage (W > %(warning)s%%, C > %(critical)s%%): " \
+          "%(used_percent)s%% (%(used_mb)s/%(total_mb)s MB, %(free_mb)s MB free)"
+
+    mem_code = check_thresholds(mem_data["used_percent"], mem_data["warning"], mem_data["critical"])
+    swap_code = check_thresholds(swap_data["used_percent"], swap_data["warning"], swap_data["critical"])
+    status.set_code(mem_code, msg % mem_data)
+    status.set_code(swap_code, msg % swap_data)
+
+    perf_msg_used = "%(used)s;%(warning_bytes)s;%(critical_bytes)s;0;%(total)s"
+
+    add_perfdata({
+        'slab_cache': d.get('Slab'),
+        'swap_cache': d.get('SwapCached'),  # blocks contained in RAM and SWAP
+        'page_tables': d.get('PageTables'),
+        'vmalloc_used': d.get('VmallocUsed'),  # removed between kernel 3.2.51 and 3.2.57
+        'mem_free': d.get('MemFree'),  # completely unused RAM
+        'mem_free_simple': mem_data['free'],  # "cache" and "buffers" are included into "free"
+        'mem_used_simple': perf_msg_used % mem_data,
+        'mem_total': d.get('MemTotal'),
+        'buffers': d.get('Buffers'),
+        'cached': d.get('Cached'),
+        'committed': d.get('Committed_AS'),  # memory requested by malloc(), can be above RAM+SWAP
+        'mapped': d.get('Mapped'),
+        'active': d.get('Active'),  # recently used memory, should normally not be swapped
+        'active_anon': d.get('Active(anon)'),
+        'active_cache': d.get('ActiveCache'),
+        'inactive': d.get('Inactive'),
+        'inact_dirty': d.get('Inact_dirty'),
+        'inact_laundry': d.get('Inact_laundry'),
+        'inact_clean': d.get('Inact_clean'),
+        'swap_total': d.get('SwapTotal'),
+        'swap_free': swap_data['free'],
+        'swap_used': perf_msg_used % swap_data,
+        'apps': mem_data["used"] - d['Slab'] - d['PageTables'] - d['SwapCached'],
+    }, status)
+
+    status.exit()
+
+
+if __name__ == "__main__":
+    main()

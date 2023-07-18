@@ -1,0 +1,34 @@
+#!/bin/bash
+
+warn=${1:-80}
+crit=${2:-90}
+
+if ! grep -wqF 'nf_conntrack' /proc/modules
+then
+	echo "Modul nf_conntrack nicht geladen"
+	exit 0
+fi
+
+/sbin/sysctl net.netfilter.nf_conntrack_max &> /dev/null
+if [[ $? == 255 ]]
+then
+	echo "issue - 'net.netfilter.nf_conntrack_max' is an unknown key"
+	exit 0
+fi
+
+conntrack_max=$(/sbin/sysctl net.netfilter.nf_conntrack_max | cut -d' ' -f3)
+conntrack_count=$(/sbin/sysctl net.netfilter.nf_conntrack_count | cut -d' ' -f3)
+let "conntrack_percentage = $conntrack_count * 100/$conntrack_max"
+
+echo "nf_conntrack = $conntrack_percentage% ($conntrack_count/$conntrack_max) | conn=$conntrack_count max=$conntrack_max"
+
+if [ $conntrack_percentage -ge $crit ]
+then
+	exit 2
+elif [ $conntrack_percentage -ge $warn ]
+then
+	exit 1
+else
+	exit 0
+fi
+

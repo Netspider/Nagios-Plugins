@@ -1,0 +1,88 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import pyhelper
+
+
+def main():
+    warn_conncount = 75000
+    crit_conncount = 100000
+
+    tcp_states = {
+        '01': 'Established',
+        '02': 'SYN Sent',
+        '03': 'SYN Received',
+        '04': 'FIN Wait1',
+        '05': 'FIN Wait2',
+        '06': 'Time Wait',
+        '07': 'Close',
+        '08': 'Close Wait',
+        '09': 'Last ACK',
+        '0A': 'Listen',
+        '0B': 'Closing',
+    }
+
+    udp_states = {
+        '01': 'UDP Established',
+        '07': 'UDP Listen',
+    }
+
+    tcpfiles = ('/proc/net/tcp', '/proc/net/tcp6')
+    udpfiles = ('/proc/net/udp', '/proc/net/udp6')
+
+    status = pyhelper.NagiosStatus("CONNECTIONS")
+
+    statistics = {}
+    for key in tcp_states.values():
+        statistics[key] = 0
+    for key in udp_states.values():
+        statistics[key] = 0
+
+    for tcpfile in tcpfiles:
+        first_line = True
+        try:
+            for tcpline in open(tcpfile, buffering=8192):
+                if first_line:
+                    first_line = False
+                    continue
+                state_num = tcpline.split()[3]
+                state = tcp_states[state_num]
+                statistics[state] += 1
+        except IOError:
+            pass
+
+    for udpfile in udpfiles:
+        first_line = True
+        try:
+            for udpline in open(udpfile, buffering=8192):
+                if first_line:
+                    first_line = False
+                    continue
+                state_num = udpline.split()[3]
+                state = udp_states[state_num]
+                statistics[state] += 1
+        except IOError:
+            pass
+
+    conncount_tcp = sum([statistics[state] for state in statistics if not state.startswith("UDP")])
+    conncount_udp = sum([statistics[state] for state in statistics if state.startswith("UDP")])
+
+    if conncount_tcp >= crit_conncount:
+        status.critical("TCP")
+    elif conncount_tcp >= warn_conncount:
+        status.warning("TCP")
+
+    if conncount_udp >= crit_conncount:
+        status.critical("UDP")
+    elif conncount_udp >= warn_conncount:
+        status.warning("UDP")
+
+    status.ok(
+        ', '.join(["{}:{}".format(k, statistics[k]) for k in sorted(statistics)]),
+        performance_data=' '.join(["'{}'={}".format(k, statistics[k]) for k in sorted(statistics)]),
+    )
+    status.exit()
+
+
+if __name__ == "__main__":
+    main()

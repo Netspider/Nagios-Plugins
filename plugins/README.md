@@ -29,6 +29,26 @@ print(site.getsitepackages()[0])
 
 
 
+## check_connections
+
+This plugin displays the number of TCP/UDP connections in their states.
+
+*Written in Python*
+
+```
+define service {
+    host_name               server
+    service_description     Connection Status
+    check_command           check_by_ssh_1arg!check_connections
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_connections=/usr/lib/nagios/plugins/check_connections
+```
+
 ## check_cpu-usage
 
 This plugin displays the cpu and IO usage.
@@ -103,6 +123,46 @@ define service {
 ```
 # NRPE / ssh-agent
 check_logstash=/usr/lib/nagios/plugins/check_logstash $ARG1$
+```
+
+## check_memory
+
+This plugin gathers ram/swap related statistics.
+
+*Written in Python*
+
+```
+define service {
+    host_name               server
+    service_description     Memory Usage
+    check_command           check_by_ssh!check_memory!"-w 90,50 -c 95,75"
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_memory=/usr/lib/nagios/plugins/check_memory $ARG1$
+```
+
+## check_nf_conntrack
+
+This plugin warns if the connection tracking table is nearly full. This table is used to track related/established packages.
+
+*Written in Bash*
+
+```
+define service {
+    host_name               server
+    service_description     Conntrack Table
+    check_command           check_by_ssh_1arg!check_nf_conntrack
+    use                     template-service
+}
+```
+
+```
+# NRPE / ssh-agent
+check_nf_conntrack=/usr/lib/nagios/plugins/check_nf_conntrack 80 90
 ```
 
 ## check\_redis
